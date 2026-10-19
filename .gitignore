@@ -1,0 +1,11 @@
+# the Overleaf project: its own repository, cloned here
+paper/
+# the situation reports: committed only encrypted (data/bvd_data.tar.gz.enc)
+data/raw/
+# the targets store and the outputs it makes
+_targets/
+outputs/
+.Rhistory
+.RData
+.Rproj.user/
+.DS_Store
