@@ -1,0 +1,4 @@
+# A test of the workflow: one fit date, short chains
+dates: 0801
+iter_warmup: 100
+iter_sampling: 100

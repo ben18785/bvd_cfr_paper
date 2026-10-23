@@ -3,7 +3,9 @@
 # draws of all the chains and makes the rest of the pipeline (the
 # projections, checks of convergence, scores, tables and plots), which it
 # uploads as the artifact data-driven-outputs. Started by hand (Actions >
-# data-driven > Run workflow), optionally for some fit dates only.
+# data-driven > Run workflow), or by a push which changes runs/data-driven.txt,
+# whose lines 'dates: <mmdd,...>', 'iter_warmup: <n>' and 'iter_sampling: <n>'
+# set the run (as the inputs of a run by hand do).
 #
 # Needs the repository secret BVD_DATA_KEY, the passphrase of
 # data/bvd_data.tar.gz.enc.
@@ -25,14 +27,14 @@ on:
         description: "Kept iterations of each chain"
         required: false
         default: "1000"
+  push:
+    paths:
+      - runs/data-driven.txt
 
 permissions:
   contents: read
 
 env:
-  BVD_DATES: ${{ inputs.dates }}
-  BVD_ITER_WARMUP: ${{ inputs.iter_warmup }}
-  BVD_ITER_SAMPLING: ${{ inputs.iter_sampling }}
   BVD_THREADS: "4"
 
 jobs:
@@ -40,11 +42,26 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       chains: ${{ steps.plan.outputs.chains }}
+      dates: ${{ steps.plan.outputs.dates }}
+      iter_warmup: ${{ steps.plan.outputs.iter_warmup }}
+      iter_sampling: ${{ steps.plan.outputs.iter_sampling }}
     steps:
+      - uses: actions/checkout@v4
       - id: plan
+        env:
+          IN_DATES: ${{ inputs.dates }}
+          IN_WARMUP: ${{ inputs.iter_warmup }}
+          IN_SAMPLING: ${{ inputs.iter_sampling }}
         run: |
+          f_line() { [ -f runs/data-driven.txt ] && sed -n "s/^$1:[[:space:]]*//p" runs/data-driven.txt | head -n 1; }
+          if [ "${{ github.event_name }}" = "push" ]; then
+            IN_DATES=$(f_line dates); IN_WARMUP=$(f_line iter_warmup); IN_SAMPLING=$(f_line iter_sampling)
+          fi
           all="0801,0809,0819,0826,0902,0909,0916,0924,0930,1007,1014"
-          dates="${BVD_DATES:-$all}"
+          dates="${IN_DATES:-$all}"
+          echo "dates=$dates" >> "$GITHUB_OUTPUT"
+          echo "iter_warmup=${IN_WARMUP:-1000}" >> "$GITHUB_OUTPUT"
+          echo "iter_sampling=${IN_SAMPLING:-1000}" >> "$GITHUB_OUTPUT"
           chains=$(python3 -c "
           import json, sys
           dates = [d.strip() for d in sys.argv[1].split(',') if d.strip()]
@@ -63,6 +80,9 @@ jobs:
         include: ${{ fromJson(needs.plan.outputs.chains) }}
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      BVD_DATES: ${{ needs.plan.outputs.dates }}
+      BVD_ITER_WARMUP: ${{ needs.plan.outputs.iter_warmup }}
+      BVD_ITER_SAMPLING: ${{ needs.plan.outputs.iter_sampling }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -90,6 +110,9 @@ jobs:
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       BVD_FITS_FROM_FILES: "1"
+      BVD_DATES: ${{ needs.plan.outputs.dates }}
+      BVD_ITER_WARMUP: ${{ needs.plan.outputs.iter_warmup }}
+      BVD_ITER_SAMPLING: ${{ needs.plan.outputs.iter_sampling }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
