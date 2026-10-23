@@ -1,5 +1,5 @@
 # The fits of the paper: every fit date, four chains of 1000 warm-up and 1000
-# kept iterations each
+# kept iterations each (the repository now public, so the minutes are free)
 dates: 0801,0809,0819,0826,0902,0909,0916,0924,0930,1007,1014
 iter_warmup: 1000
 iter_sampling: 1000
