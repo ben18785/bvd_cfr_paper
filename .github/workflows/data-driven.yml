@@ -1,0 +1,118 @@
+# The fits of the data-driven model (_targets.R): each chain of each fit date
+# is a job of its own, which saves the chain's draws; a last job takes the
+# draws of all the chains and makes the rest of the pipeline (the
+# projections, checks of convergence, scores, tables and plots), which it
+# uploads as the artifact data-driven-outputs. Started by hand (Actions >
+# data-driven > Run workflow), optionally for some fit dates only.
+#
+# Needs the repository secret BVD_DATA_KEY, the passphrase of
+# data/bvd_data.tar.gz.enc.
+
+name: data-driven
+
+on:
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: "Fit dates as mmdd, separated by commas (empty for all)"
+        required: false
+        default: ""
+      iter_warmup:
+        description: "Warm-up iterations of each chain"
+        required: false
+        default: "1000"
+      iter_sampling:
+        description: "Kept iterations of each chain"
+        required: false
+        default: "1000"
+
+permissions:
+  contents: read
+
+env:
+  BVD_DATES: ${{ inputs.dates }}
+  BVD_ITER_WARMUP: ${{ inputs.iter_warmup }}
+  BVD_ITER_SAMPLING: ${{ inputs.iter_sampling }}
+  BVD_THREADS: "4"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      chains: ${{ steps.plan.outputs.chains }}
+    steps:
+      - id: plan
+        run: |
+          all="0801,0809,0819,0826,0902,0909,0916,0924,0930,1007,1014"
+          dates="${BVD_DATES:-$all}"
+          chains=$(python3 -c "
+          import json, sys
+          dates = [d.strip() for d in sys.argv[1].split(',') if d.strip()]
+          print(json.dumps([{'label': d, 'chain': k} for d in dates for k in range(1, 5)]))" "$dates")
+          echo "chains=$chains" >> "$GITHUB_OUTPUT"
+          echo "$chains"
+
+  fit:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    name: fit ${{ matrix.label }} chain ${{ matrix.chain }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.chains) }}
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Restore the data
+        env:
+          BVD_DATA_KEY: ${{ secrets.BVD_DATA_KEY }}
+        run: |
+          printf '%s' "$BVD_DATA_KEY" > "$RUNNER_TEMP/bvd_data_key"
+          BVD_DATA_KEY_FILE="$RUNNER_TEMP/bvd_data_key" scripts/decrypt_bvd_data.sh
+          rm "$RUNNER_TEMP/bvd_data_key"
+      - name: Fit the chain
+        run: |
+          Rscript -e 'targets::tar_make(names = "fit_${{ matrix.label }}_${{ matrix.chain }}", reporter = "timestamp")'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fit-${{ matrix.label }}-${{ matrix.chain }}
+          path: fits/${{ matrix.label }}_${{ matrix.chain }}.rds
+          retention-days: 30
+
+  collect:
+    needs: [plan, fit]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      BVD_FITS_FROM_FILES: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fit-*
+          path: fits
+          merge-multiple: true
+      - name: Restore the data
+        env:
+          BVD_DATA_KEY: ${{ secrets.BVD_DATA_KEY }}
+        run: |
+          printf '%s' "$BVD_DATA_KEY" > "$RUNNER_TEMP/bvd_data_key"
+          BVD_DATA_KEY_FILE="$RUNNER_TEMP/bvd_data_key" scripts/decrypt_bvd_data.sh
+          rm "$RUNNER_TEMP/bvd_data_key"
+      - name: Make the rest of the pipeline
+        run: |
+          ls -l fits
+          Rscript -e 'targets::tar_make(reporter = "timestamp")'
+          Rscript -e 'print(as.data.frame(targets::tar_read(convergence)), width = 200)'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: data-driven-outputs
+          path: outputs/data-driven
+          retention-days: 90
