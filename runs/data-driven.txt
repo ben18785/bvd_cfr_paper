@@ -1,5 +1,5 @@
-# A test of the workflow: one fit date, short chains (second attempt, without the
-# compiled model in the repository)
-dates: 0801
-iter_warmup: 100
-iter_sampling: 100
+# The fits of the paper: every fit date, four chains of 1000 warm-up and 1000
+# kept iterations each
+dates: 0801,0809,0819,0826,0902,0909,0916,0924,0930,1007,1014
+iter_warmup: 1000
+iter_sampling: 1000
