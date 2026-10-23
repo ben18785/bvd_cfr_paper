@@ -10,3 +10,6 @@ outputs/
 .Rproj.user/
 .DS_Store
 fits/
+# compiled Stan models
+stan/*
+!stan/*.stan

@@ -1,4 +1,5 @@
-# A test of the workflow: one fit date, short chains
+# A test of the workflow: one fit date, short chains (second attempt, without the
+# compiled model in the repository)
 dates: 0801
 iter_warmup: 100
 iter_sampling: 100
