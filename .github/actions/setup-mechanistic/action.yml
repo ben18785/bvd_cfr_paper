@@ -1,0 +1,21 @@
+# R, the packages of the mechanistic pipeline, and the model (the package
+# incidenceinflation at the commit named by the workflow's PACKAGE)
+name: setup-mechanistic
+description: R, the packages of the mechanistic pipeline and the model
+runs:
+  using: composite
+  steps:
+    - uses: r-lib/actions/setup-r@v2
+      with:
+        use-public-rspm: true
+    - uses: r-lib/actions/setup-r-dependencies@v2
+      with:
+        dependencies: '"hard"'
+        packages: |
+          any::targets
+          any::dplyr
+          any::tidyr
+          any::tibble
+          any::ggplot2
+          any::posterior
+          ${{ env.PACKAGE }}

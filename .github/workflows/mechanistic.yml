@@ -1,0 +1,223 @@
+# The fits of the mechanistic model (_targets_mechanistic.R): each chain of
+# each fit date is a job of its own, which saves the chain's draws and what is
+# needed to carry it on; a last job takes the draws of all the chains and
+# makes the rest of the pipeline (the checks of convergence, tables and
+# plots), which it uploads as the artifact mechanistic-outputs.
+#
+# A chain stops after time_limit minutes (default 320), short of the six
+# hours a job may take, and a later run carries it on. Started by hand
+# (Actions > mechanistic > Run workflow), or by a push which changes
+# runs/mechanistic.txt, whose lines (each optional)
+#   dates: <mmdd,...>       the fits (default all)
+#   iterations: <n>         of each chain in all (default 3000)
+#   ridge: true             adds the joint move of the fraction counted on the
+#                           day of death and the delay to a death being recorded
+#   continue: <run id>      carries on the chains of that run
+#   rounds: <n>             how many more runs may follow, each carrying on
+#                           the one before, until every chain has its iterations
+#   time_limit: <minutes>
+# set the run (as the inputs of a run by hand do). A run starts the next round
+# only if every chain ran without failing and some stopped short; this needs
+# the workflow on the default branch (otherwise the summary of the run says
+# which run to continue).
+#
+# Needs the repository secret BVD_DATA_KEY, the passphrase of
+# data/bvd_data.tar.gz.enc.
+
+name: mechanistic
+run-name: ${{ inputs.continue_from && format('mechanistic (carrying on run {0})', inputs.continue_from) || github.event.head_commit.message || 'mechanistic' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: "Fit dates as mmdd, separated by commas (empty for all)"
+        required: false
+        default: ""
+      iterations:
+        description: "Iterations of each chain in all"
+        required: false
+        default: "3000"
+      ridge:
+        description: "Add the ridge move (true or false)"
+        required: false
+        default: "false"
+      continue_from:
+        description: "The id of an earlier run whose chains are carried on"
+        required: false
+        default: ""
+      rounds:
+        description: "How many more runs may follow to carry the chains on"
+        required: false
+        default: "0"
+      time_limit:
+        description: "Minutes after which a chain stops, to be carried on"
+        required: false
+        default: "320"
+  push:
+    paths:
+      - runs/mechanistic.txt
+
+permissions:
+  contents: read
+  # write: to start the next round
+  actions: write
+
+env:
+  PACKAGE: github::ben18785/incidenceinflation_2.0@7f79c33
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      chains: ${{ steps.plan.outputs.chains }}
+      dates: ${{ steps.plan.outputs.dates }}
+      iterations: ${{ steps.plan.outputs.iterations }}
+      ridge: ${{ steps.plan.outputs.ridge }}
+      continue_from: ${{ steps.plan.outputs.continue_from }}
+      rounds: ${{ steps.plan.outputs.rounds }}
+      time_limit: ${{ steps.plan.outputs.time_limit }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          IN_DATES: ${{ inputs.dates }}
+          IN_ITERATIONS: ${{ inputs.iterations }}
+          IN_RIDGE: ${{ inputs.ridge }}
+          IN_CONTINUE: ${{ inputs.continue_from }}
+          IN_ROUNDS: ${{ inputs.rounds }}
+          IN_TIME_LIMIT: ${{ inputs.time_limit }}
+        run: |
+          f_line() { [ -f runs/mechanistic.txt ] && sed -n "s/^$1:[[:space:]]*//p" runs/mechanistic.txt | head -n 1 | tr -d '[:space:]'; }
+          if [ "${{ github.event_name }}" = "push" ]; then
+            IN_DATES=$(f_line dates); IN_ITERATIONS=$(f_line iterations); IN_RIDGE=$(f_line ridge)
+            IN_CONTINUE=$(f_line continue); IN_ROUNDS=$(f_line rounds); IN_TIME_LIMIT=$(f_line time_limit)
+          fi
+          all="0801,0809,0819,0826,0902,0909,0916,0924,0930,1007,1014"
+          dates="${IN_DATES:-$all}"
+          {
+            echo "dates=$dates"
+            echo "iterations=${IN_ITERATIONS:-3000}"
+            echo "ridge=$([ "$IN_RIDGE" = "true" ] && echo 1 || echo 0)"
+            echo "continue_from=$IN_CONTINUE"
+            echo "rounds=${IN_ROUNDS:-0}"
+            echo "time_limit=${IN_TIME_LIMIT:-320}"
+          } | tee -a "$GITHUB_OUTPUT"
+          chains=$(python3 -c "
+          import json, sys
+          dates = [d.strip() for d in sys.argv[1].split(',') if d.strip()]
+          print(json.dumps([{'label': d, 'chain': k} for d in dates for k in range(1, 5)]))" "$dates")
+          echo "chains=$chains" >> "$GITHUB_OUTPUT"
+
+  fit:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    name: fit ${{ matrix.label }} chain ${{ matrix.chain }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.chains) }}
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      BVD_DATES: ${{ needs.plan.outputs.dates }}
+      BVD_ITERATIONS: ${{ needs.plan.outputs.iterations }}
+      BVD_RIDGE: ${{ needs.plan.outputs.ridge }}
+      BVD_TIME_LIMIT: ${{ needs.plan.outputs.time_limit }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-mechanistic
+      - name: Restore the data
+        env:
+          BVD_DATA_KEY: ${{ secrets.BVD_DATA_KEY }}
+        run: |
+          printf '%s' "$BVD_DATA_KEY" > "$RUNNER_TEMP/bvd_data_key"
+          BVD_DATA_KEY_FILE="$RUNNER_TEMP/bvd_data_key" scripts/decrypt_bvd_data.sh
+          rm "$RUNNER_TEMP/bvd_data_key"
+      - name: Fetch the chain to carry on
+        if: needs.plan.outputs.continue_from != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: state-${{ matrix.label }}-${{ matrix.chain }}
+          path: states_mechanistic
+          run-id: ${{ needs.plan.outputs.continue_from }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run the chain
+        run: |
+          ls -l states_mechanistic 2>/dev/null || echo "The chain starts afresh."
+          (while sleep 600; do tail -qn 1 fits_mechanistic/*_progress.txt 2>/dev/null; done) &
+          Rscript -e 'targets::tar_make(names = "fit_${{ matrix.label }}_${{ matrix.chain }}", script = "_targets_mechanistic.R", store = "_targets_mechanistic", reporter = "timestamp")'
+          Rscript -e 'x <- readRDS("fits_mechanistic/${{ matrix.label }}_${{ matrix.chain }}.rds"); cat(sprintf("%d of %d iterations done, %.0f minutes in all\n", x$niterations, x$niterations_target, x$minutes))'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fit-${{ matrix.label }}-${{ matrix.chain }}
+          path: fits_mechanistic/${{ matrix.label }}_${{ matrix.chain }}.rds
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: state-${{ matrix.label }}-${{ matrix.chain }}
+          path: states_mechanistic/${{ matrix.label }}_${{ matrix.chain }}.rds
+          retention-days: 30
+
+  collect:
+    needs: [plan, fit]
+    # after the fits, even if some failed, but not if the run was cancelled
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      BVD_FITS_FROM_FILES: "1"
+      BVD_DATES: ${{ needs.plan.outputs.dates }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-mechanistic
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fit-*
+          path: fits_mechanistic
+          merge-multiple: true
+      - name: Restore the data
+        env:
+          BVD_DATA_KEY: ${{ secrets.BVD_DATA_KEY }}
+        run: |
+          printf '%s' "$BVD_DATA_KEY" > "$RUNNER_TEMP/bvd_data_key"
+          BVD_DATA_KEY_FILE="$RUNNER_TEMP/bvd_data_key" scripts/decrypt_bvd_data.sh
+          rm "$RUNNER_TEMP/bvd_data_key"
+      - name: Make the rest of the pipeline
+        run: |
+          ls -l fits_mechanistic
+          Rscript -e 'targets::tar_make(script = "_targets_mechanistic.R", store = "_targets_mechanistic", reporter = "timestamp")'
+          Rscript -e 'print(as.data.frame(targets::tar_read(convergence, store = "_targets_mechanistic")), width = 250)' | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mechanistic-outputs
+          path: outputs/mechanistic
+          retention-days: 90
+      # the next round, carrying on this run's chains, if rounds are left, no
+      # chain failed (one which did saved nothing to carry on) and some chains
+      # stopped short of their iterations
+      - name: Start the next round
+        if: ${{ !cancelled() && needs.fit.result == 'success' && needs.plan.outputs.rounds != '0' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ROUNDS: ${{ needs.plan.outputs.rounds }}
+        run: |
+          unfinished=$(Rscript -e 'x <- lapply(list.files("fits_mechanistic", "[.]rds$", full.names = TRUE), readRDS); cat(sum(vapply(x, function(f) f$niterations < f$niterations_target, logical(1))))')
+          echo "Chains which stopped short of their iterations: $unfinished"
+          if [ "$unfinished" = "0" ]; then
+            echo "Every chain has its iterations: no more rounds."
+            exit 0
+          fi
+          if gh api -X POST "repos/$GITHUB_REPOSITORY/actions/workflows/mechanistic.yml/dispatches" \
+            -f ref="$GITHUB_REF_NAME" \
+            -f "inputs[dates]=${{ needs.plan.outputs.dates }}" \
+            -f "inputs[iterations]=${{ needs.plan.outputs.iterations }}" \
+            -f "inputs[ridge]=$([ '${{ needs.plan.outputs.ridge }}' = '1' ] && echo true || echo false)" \
+            -f "inputs[time_limit]=${{ needs.plan.outputs.time_limit }}" \
+            -f "inputs[continue_from]=$GITHUB_RUN_ID" -f "inputs[rounds]=$((ROUNDS - 1))"; then
+            echo "Started the next round, carrying on run $GITHUB_RUN_ID ($((ROUNDS - 1)) more may follow)." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Could not start the next round (the workflow must be on the default branch): push runs/mechanistic.txt with 'continue: $GITHUB_RUN_ID'." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi

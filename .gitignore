@@ -13,3 +13,7 @@ fits/
 # compiled Stan models
 stan/*
 !stan/*.stan
+# the mechanistic pipeline's store, chains and their states
+_targets_mechanistic/
+fits_mechanistic/
+states_mechanistic/
