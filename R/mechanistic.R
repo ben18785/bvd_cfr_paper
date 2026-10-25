@@ -51,12 +51,13 @@ mechanistic_analysis <- function(snapshots, date_now, date_first = "2026-05-11",
 #' The priors of the delays, shared with the data-driven model
 #'
 #' The centres of the gamma delay to a case being reported: its mean has a
-#' gamma prior with mean 16 and sd 6.5 days, between the mean delay from
+#' gamma prior with mean 16 and sd 10 days, between the mean delay from
 #' onset to notification of the outbreaks in the DRC of 1995 to 2014 (9.5
 #' days; Rosello et al. 2015) and that from onset to a situation report in
 #' North Kivu and Ituri in September 2018 (23 days; Tariq et al. 2019); its
-#' sd has a gamma prior with mean 13 and sd 6.5 days, the sd of those delays
-#' being about 0.8 of their mean. The centres of the delay from death to a
+#' sd has a gamma prior with mean 13 and sd 8 days, the sd of those delays
+#' being about 0.8 of their mean (both priors with the same sd relative to
+#' their mean). The centres of the delay from death to a
 #' death being recorded have gamma priors with mean 4 and sd 4 days; the time
 #' from onset to death is gamma with mean 9.3 and sd 5.5 days, from past
 #' outbreaks. The backlog's share and rate are the centres of the package's
@@ -68,7 +69,7 @@ mechanistic_analysis <- function(snapshots, date_now, date_first = "2026-05-11",
 #'   of the mean and sd of each delay), 'onset_to_death' (mean, sd) and
 #'   'backlog' (share and rate: the centres of their priors)
 mechanistic_delay_priors <- function() {
-  list(reporting = list(mean_mu = 16, mean_sigma = 6.5, sd_mu = 13, sd_sigma = 6.5),
+  list(reporting = list(mean_mu = 16, mean_sigma = 10, sd_mu = 13, sd_sigma = 8),
        recording = list(mean_mu = 4, mean_sigma = 4, sd_mu = 4, sd_sigma = 4),
        onset_to_death = list(mean = 9.3, sd = 5.5),
        backlog = list(share = 0.2, rate = 1 / 60))
@@ -158,7 +159,11 @@ fit_mechanistic_chain <- function(analysis, chain, path, state, iterations,
     reporting = mechanistic_delay_priors()$reporting,
     max_cases = ceiling(4 * max(initial_cases_true$cases_true) + 50),
     overdispersion = list(mean = 20, sd = 20),
-    revisions = list(eta_mu = 0.005, eta_sigma = 0.005, rho_alpha = 1, rho_beta = 4),
+    # wrong records: about 0.03 per genuine record are withdrawn between
+    # reports, and the correction of 6 September removed at least 8.5% of the
+    # records of the onset days it corrected; the daily chance of a wrong
+    # record being withdrawn is uniform
+    revisions = list(eta_mu = 0.1, eta_sigma = 0.1, rho_alpha = 1, rho_beta = 1),
     max_erroneous = max_erroneous,
     reporting_effects = list(tail_weight_alpha = 1, tail_weight_beta = 19,
                              tail_mean_mu = 40, tail_mean_sigma = 30),
