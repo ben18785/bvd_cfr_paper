@@ -48,6 +48,32 @@ mechanistic_analysis <- function(snapshots, date_now, date_first = "2026-05-11",
   analysis
 }
 
+#' The priors of the delays, shared with the data-driven model
+#'
+#' The centres of the gamma delay to a case being reported: its mean has a
+#' gamma prior with mean 16 and sd 6.5 days, between the mean delay from
+#' onset to notification of the outbreaks in the DRC of 1995 to 2014 (9.5
+#' days; Rosello et al. 2015) and that from onset to a situation report in
+#' North Kivu and Ituri in September 2018 (23 days; Tariq et al. 2019); its
+#' sd has a gamma prior with mean 13 and sd 6.5 days, the sd of those delays
+#' being about 0.8 of their mean. The centres of the delay from death to a
+#' death being recorded have gamma priors with mean 4 and sd 4 days; the time
+#' from onset to death is gamma with mean 9.3 and sd 5.5 days, from past
+#' outbreaks. The backlog's share and rate are the centres of the package's
+#' priors on them (logit share ~ N(logit 0.2, 1), log rate ~ N(log 1/60, 1)),
+#' which the fits use.
+#'
+#' @return a named list: 'reporting' and 'recording' (mean_mu, mean_sigma,
+#'   sd_mu and sd_sigma: the mean and sd of the gamma priors on the centres
+#'   of the mean and sd of each delay), 'onset_to_death' (mean, sd) and
+#'   'backlog' (share and rate: the centres of their priors)
+mechanistic_delay_priors <- function() {
+  list(reporting = list(mean_mu = 16, mean_sigma = 6.5, sd_mu = 13, sd_sigma = 6.5),
+       recording = list(mean_mu = 4, mean_sigma = 4, sd_mu = 4, sd_sigma = 4),
+       onset_to_death = list(mean = 9.3, sd = 5.5),
+       backlog = list(share = 0.2, rate = 1 / 60))
+}
+
 #' The settings of the model of deaths
 #'
 #' The time from onset to death is gamma with mean 9.3 and sd 5.5 days (from
@@ -63,11 +89,11 @@ mechanistic_analysis <- function(snapshots, date_now, date_first = "2026-05-11",
 #'   incidenceinflation::mcmc_single
 mechanistic_settings <- function(ridge = FALSE) {
   list(
-    onset_to_death = list(mean = 9.3, sd = 5.5),
+    onset_to_death = mechanistic_delay_priors()$onset_to_death,
     dated_by_death = c(list(fraction = list(alpha = 1, beta = 1, initial = 0.25), exact = TRUE),
                        if(ridge) list(ridge = TRUE)),
     initial_delay = list(mean = 3, sd = 2.5),
-    delay_prior = list(mean_mu = 4, mean_sigma = 4, sd_mu = 4, sd_sigma = 4),
+    delay_prior = mechanistic_delay_priors()$recording,
     triggered = list(initial = 0.95, n_steps = 0L),
     fatal_delay = FALSE,
     recording_fixed_until = "2026-07-31",
@@ -129,7 +155,7 @@ fit_mechanistic_chain <- function(analysis, chain, path, state, iterations,
   delay_changepoints <- list(min_length = 14, n_partition_moves = 50)
   priors <- list(
     Rt = list(shape = 1, rate = 1),
-    reporting = list(mean_mu = 7, mean_sigma = 10, sd_mu = 5, sd_sigma = 5),
+    reporting = mechanistic_delay_priors()$reporting,
     max_cases = ceiling(4 * max(initial_cases_true$cases_true) + 50),
     overdispersion = list(mean = 20, sd = 20),
     revisions = list(eta_mu = 0.005, eta_sigma = 0.005, rho_alpha = 1, rho_beta = 4),
