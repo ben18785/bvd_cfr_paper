@@ -148,6 +148,7 @@ jobs:
         run: |
           ls -l fits fits_comparison
           Rscript -e 'targets::tar_make(script = "_targets_comparison.R", store = "_targets_comparison", reporter = "timestamp")'
+          Rscript -e 'x <- read.csv("outputs/comparison/scores.csv"); b <- x[x$n_bad > 0, ]; cat("draws left out:", nrow(b), "scores\n"); if(nrow(b) > 0) print(head(b[, c("model", "series", "date_now", "date_report", "date_onset", "n_bad", "min_bad")], 40))' | tee -a "$GITHUB_STEP_SUMMARY"
           Rscript -e 'x <- read.csv("outputs/comparison/summary_by_week.csv"); print(x[x$set == "common", c("model", "series", "week", "n", "crps_log", "coverage50", "coverage90", "log_score_sum_finite", "no_probability")], digits = 3)' | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()

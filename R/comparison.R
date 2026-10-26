@@ -344,8 +344,8 @@ comparison_log_score <- function(y, x) {
 #' For each onset day and report: the CRPS of the count and of log(count + 1),
 #' the log score (comparison_log_score), the randomised probability integral
 #' transform, and the 50% and 90% intervals (whether they hold the count, and
-#' their widths). Draws which are not finite are left out, with a warning, and
-#' counted (n_nonfinite).
+#' their widths). Draws which are not finite or are negative are left out,
+#' with a warning, and counted (n_bad, with the smallest of them, min_bad).
 #'
 #' @param projections as described above
 #' @param truth as comparison_truth (of the same fit date)
@@ -361,11 +361,12 @@ comparison_score <- function(projections, truth, seed = 1) {
     j <- match(rows$date_onset, projections$onsets)
     scores <- lapply(seq_len(nrow(rows)), function(k) {
       x <- m[, j[k]]
-      bad <- !is.finite(x)
+      bad <- !is.finite(x) | x < 0
+      min_bad <- if(any(bad)) suppressWarnings(min(x[bad], na.rm = TRUE)) else NA_real_
       if(any(bad)) {
-        warning(sprintf("%s %s, report %s, onset %s: %d draws not finite, left out",
-                        projections$model, projections$series, r, rows$date_onset[k], sum(bad)),
-                call. = FALSE)
+        warning(sprintf("%s %s, report %s, onset %s: %d draws not finite or negative (smallest %s), left out",
+                        projections$model, projections$series, r, rows$date_onset[k], sum(bad),
+                        format(min_bad)), call. = FALSE)
         x <- x[!bad]
         if(length(x) == 0) stop("no finite draws to score")
       }
@@ -378,7 +379,7 @@ comparison_score <- function(projections, truth, seed = 1) {
                     pit = lower + stats::runif(1) * (mean(x <= y) - lower),
                     p50 = q[3],
                     in50 = y >= q[2] & y <= q[4], in90 = y >= q[1] & y <= q[5],
-                    width50 = q[4] - q[2], width90 = q[5] - q[1], n_nonfinite = sum(bad))
+                    width50 = q[4] - q[2], width90 = q[5] - q[1], n_bad = sum(bad), min_bad = min_bad)
     })
     dplyr::bind_cols(rows, dplyr::bind_rows(scores))
   })) %>% dplyr::mutate(model = projections$model, .before = 1)
