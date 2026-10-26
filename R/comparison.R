@@ -230,9 +230,10 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
 #' @param snapshots as build_bvd_snapshots
 #' @param date_now the fit date
 #' @param settings as comparison_settings
+#' @param seed for the draws
 #' @return a list of two projections (cases and deaths), or NULL for a series
 #'   if there are too few onset days to fit
-fit_baselinenowcast <- function(snapshots, date_now, settings = comparison_settings()) {
+fit_baselinenowcast <- function(snapshots, date_now, settings = comparison_settings(), seed = 1) {
   date_now <- as.Date(date_now)
   s <- settings$baselinenowcast
   reports <- comparison_reports(snapshots, date_now, settings)
@@ -270,6 +271,7 @@ fit_baselinenowcast <- function(snapshots, date_now, settings = comparison_setti
              n_retrospective_nowcasts = tv$n_retrospective_nowcasts))
     }, error = function(e) NULL)
     if(is.null(fitted)) return(NULL)
+    set.seed(seed)
     now <- counts %>% dplyr::filter(.data$date_onset %in% scored) %>%
       dplyr::group_by(.data$date_onset) %>%
       dplyr::summarise(now = .data$count[which.max(.data$date_reported)])
@@ -342,7 +344,8 @@ comparison_log_score <- function(y, x) {
 #' For each onset day and report: the CRPS of the count and of log(count + 1),
 #' the log score (comparison_log_score), the randomised probability integral
 #' transform, and the 50% and 90% intervals (whether they hold the count, and
-#' their widths).
+#' their widths). Draws which are not finite are left out, with a warning, and
+#' counted (n_nonfinite).
 #'
 #' @param projections as described above
 #' @param truth as comparison_truth (of the same fit date)
@@ -358,6 +361,14 @@ comparison_score <- function(projections, truth, seed = 1) {
     j <- match(rows$date_onset, projections$onsets)
     scores <- lapply(seq_len(nrow(rows)), function(k) {
       x <- m[, j[k]]
+      bad <- !is.finite(x)
+      if(any(bad)) {
+        warning(sprintf("%s %s, report %s, onset %s: %d draws not finite, left out",
+                        projections$model, projections$series, r, rows$date_onset[k], sum(bad)),
+                call. = FALSE)
+        x <- x[!bad]
+        if(length(x) == 0) stop("no finite draws to score")
+      }
       y <- rows$shown[k]
       q <- stats::quantile(x, c(0.05, 0.25, 0.5, 0.75, 0.95), names = FALSE)
       lower <- mean(x <= y - 1)
@@ -367,7 +378,7 @@ comparison_score <- function(projections, truth, seed = 1) {
                     pit = lower + stats::runif(1) * (mean(x <= y) - lower),
                     p50 = q[3],
                     in50 = y >= q[2] & y <= q[4], in90 = y >= q[1] & y <= q[5],
-                    width50 = q[4] - q[2], width90 = q[5] - q[1])
+                    width50 = q[4] - q[2], width90 = q[5] - q[1], n_nonfinite = sum(bad))
     })
     dplyr::bind_cols(rows, dplyr::bind_rows(scores))
   })) %>% dplyr::mutate(model = projections$model, .before = 1)

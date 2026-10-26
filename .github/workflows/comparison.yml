@@ -6,7 +6,8 @@
 # artifact comparison-outputs. Started by hand (Actions > comparison > Run
 # workflow), or by a push which changes runs/comparison.txt, whose lines
 # 'dates: <mmdd,...>' and 'data_driven_run: <run id>' set the run (as the
-# inputs of a run by hand do).
+# inputs of a run by hand do). With 'epinowcast_run: <run id>' the epinowcast
+# fits are not run again but taken from that run of this workflow.
 #
 # Needs the repository secret BVD_DATA_KEY, the passphrase of
 # data/bvd_data.tar.gz.enc.
@@ -23,6 +24,10 @@ on:
       data_driven_run:
         description: "The run of the data-driven workflow whose chains are projected"
         required: true
+      epinowcast_run:
+        description: "A run of this workflow whose epinowcast fits are reused (empty to fit them)"
+        required: false
+        default: ""
   push:
     paths:
       - runs/comparison.txt
@@ -43,22 +48,25 @@ jobs:
       dates: ${{ steps.plan.outputs.dates }}
       labels: ${{ steps.plan.outputs.labels }}
       data_driven_run: ${{ steps.plan.outputs.data_driven_run }}
+      epinowcast_run: ${{ steps.plan.outputs.epinowcast_run }}
     steps:
       - uses: actions/checkout@v4
       - id: plan
         env:
           IN_DATES: ${{ inputs.dates }}
           IN_RUN: ${{ inputs.data_driven_run }}
+          IN_ENW: ${{ inputs.epinowcast_run }}
         run: |
           f_line() { [ -f runs/comparison.txt ] && sed -n "s/^$1:[[:space:]]*//p" runs/comparison.txt | head -n 1 | tr -d '[:space:]'; }
           if [ "${{ github.event_name }}" = "push" ]; then
-            IN_DATES=$(f_line dates); IN_RUN=$(f_line data_driven_run)
+            IN_DATES=$(f_line dates); IN_RUN=$(f_line data_driven_run); IN_ENW=$(f_line epinowcast_run)
           fi
           all="0801,0809,0819,0826,0902,0909,0916,0924,0930,1007"
           dates="${IN_DATES:-$all}"
           [ -n "$IN_RUN" ] || { echo "No run of the data-driven workflow given."; exit 1; }
           echo "dates=$dates" >> "$GITHUB_OUTPUT"
           echo "data_driven_run=$IN_RUN" >> "$GITHUB_OUTPUT"
+          echo "epinowcast_run=$IN_ENW" >> "$GITHUB_OUTPUT"
           labels=$(python3 -c "
           import json, sys
           print(json.dumps([d.strip() for d in sys.argv[1].split(',') if d.strip()]))" "$dates")
@@ -67,6 +75,7 @@ jobs:
 
   fit:
     needs: plan
+    if: ${{ needs.plan.outputs.epinowcast_run == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 355
     name: epinowcast ${{ matrix.label }}
@@ -119,6 +128,8 @@ jobs:
           pattern: epinowcast-*
           path: fits_comparison
           merge-multiple: true
+          run-id: ${{ needs.plan.outputs.epinowcast_run || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
           pattern: fit-*
