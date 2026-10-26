@@ -64,7 +64,7 @@ permissions:
   actions: write
 
 env:
-  PACKAGE: github::ben18785/incidenceinflation_2.0@7f79c33
+  PACKAGE: github::ben18785/incidenceinflation_2.0@a88dcf1
 
 jobs:
   plan:

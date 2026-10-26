@@ -5,7 +5,8 @@
 # onset to death and a delay which is estimated; a fraction of fatal cases are
 # counted on their day of death, not of onset (the exact form); a death
 # brings about the report of its case if it has not already been reported
-# (the share of such fatal cases held at 0.95); and deaths recorded after a
+# (all such fatal cases, since the deaths in the reports are among the
+# cases); and deaths recorded after a
 # long delay (the backlog) have a delay of their own. The fits sample all of
 # this by MCMC, one chain at a time, carried on across runs since a chain can
 # need more than the six hours a GitHub job allows.
@@ -80,7 +81,7 @@ mechanistic_delay_priors <- function() {
 #' The time from onset to death is gamma with mean 9.3 and sd 5.5 days (from
 #' past outbreaks); the fraction of fatal cases counted on their day of death
 #' has a uniform prior; the share of fatal cases reported when their death is
-#' recorded is held at 0.95; the delay to a death being recorded is the same
+#' recorded is held at 1; the delay to a death being recorded is the same
 #' for all onset days up to 31 July; and deaths are held in the backlog for at
 #' least 21 days.
 #'
@@ -95,7 +96,7 @@ mechanistic_settings <- function(ridge = FALSE) {
                        if(ridge) list(ridge = TRUE)),
     initial_delay = list(mean = 3, sd = 2.5),
     delay_prior = mechanistic_delay_priors()$recording,
-    triggered = list(initial = 0.95, n_steps = 0L),
+    triggered = list(initial = 1, n_steps = 0L),
     fatal_delay = FALSE,
     recording_fixed_until = "2026-07-31",
     recording_backlog = list(hold_days = 21L))
