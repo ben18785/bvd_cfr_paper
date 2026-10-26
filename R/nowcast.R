@@ -64,18 +64,64 @@ nowcast_delay_knots <- function(tri, probs = c(0.25, 0.5, 0.75), first_max = 7) 
 #' @param mean,sd of the gamma distribution, in days
 #' @return a vector of log probabilities for the delays 0 to D
 nowcast_reference_delay <- function(D, mean, sd) {
+  log(nowcast_gamma_days(D, mean, sd))
+}
+
+#' A gamma distribution discretised to whole days 0 to D: the probability it
+#' assigns to (d - 1/2, d + 1/2] (to [0, 1/2] for d = 0), renormalised
+#' @inheritParams nowcast_reference_delay
+nowcast_gamma_days <- function(D, mean, sd) {
   shape <- mean^2 / sd^2
   rate <- mean / sd^2
   p <- diff(stats::pgamma(c(0, seq_len(D + 1) - 0.5), shape, rate))
+  p / sum(p)
+}
+
+#' The reference delay from onset to a death being recorded, as the
+#' mechanistic model has it at the means of its priors: a fatal case counted
+#' on its day of onset is recorded after the time from onset to death (gamma,
+#' the probability of (z - 1, z] for z = 1, ..., its 99.9th percentile
+#' rounded up, renormalised) plus the delay from death to recording; one
+#' counted on its day of death (the fraction f, at its prior mean) after the
+#' delay from death to recording alone. The delay from death to recording is
+#' prompt (gamma, at the prior means of its centres; nowcast_gamma_days) for
+#' a share 1 - b of deaths; the share b in the backlog are recorded from
+#' hold_days after the death, with probability 1 - exp(-rate) each day (b and
+#' rate at the centres of their priors). Truncated to D days and
+#' renormalised.
+#'
+#' @param D the longest delay
+#' @return the log probabilities of delays 0 to D
+nowcast_reference_death <- function(D) {
+  priors <- mechanistic_delay_priors()
+  m <- priors$onset_to_death$mean
+  s <- priors$onset_to_death$sd
+  z_max <- ceiling(stats::qgamma(0.999, m^2 / s^2, m / s^2))
+  p_die <- diff(stats::pgamma(0:z_max, m^2 / s^2, m / s^2))
+  p_die <- p_die / sum(p_die)
+  p_prompt <- nowcast_gamma_days(D, priors$recording$mean_mu, priors$recording$sd_mu)
+  hold <- mechanistic_settings()$recording_backlog$hold_days
+  rate <- priors$backlog$rate
+  p_backlog <- ifelse(0:D >= hold, (1 - exp(-rate)) * exp(-rate * pmax(0, 0:D - hold)), 0)
+  p_rec <- (1 - priors$backlog$share) * p_prompt + priors$backlog$share * p_backlog / sum(p_backlog)
+  p_onset <- vapply(0:D, function(d) {
+    z <- seq_len(min(d, z_max))
+    sum(p_die[z] * p_rec[d - z + 1])
+  }, numeric(1))
+  fraction <- mechanistic_settings()$dated_by_death$fraction
+  f <- fraction$alpha / (fraction$alpha + fraction$beta)
+  p <- (1 - f) * p_onset / sum(p_onset) + f * p_rec
   log(p / sum(p))
 }
 
 #' Priors of each series (Table tab:nowcast-priors of the paper)
 #'
-#' The reference delay is a gamma distribution with mean 7 days and sd 10
-#' days for cases (the prior centre of the reporting delay of the mechanistic
-#' model) and mean 13 days for deaths (the time from onset to death of 9.3
-#' days and the prior centre of 4 days of the delay from death to recording).
+#' The reference delays are those at the prior centres of the mechanistic
+#' model (mechanistic_delay_priors): for cases, a gamma distribution with the
+#' prior means of the centres of the mean and sd of the delay to a case being
+#' reported; for deaths, the delay from onset to a death being recorded,
+#' with fatal cases counted on their day of onset or of death
+#' (nowcast_reference_death).
 #' Cases have a tail beyond d_c = 28 days common to all onset days, with the
 #' probability q of a record beyond it Beta(2, 38); deaths have no such tail.
 #'
@@ -88,7 +134,6 @@ nowcast_priors <- function(column) {
        tau_t_scale = if(is_deaths) 0.5 else 0.2,
        sigma_u_scale = 0.5, rho_scale = 0.25,
        beta_g_scale = 3, log_phi_mu = log(20), log_phi_sd = 1.5,
-       reference_mean = if(is_deaths) 13 else 7, reference_sd = 10,
        d_c = 28L, q_alpha = 2, q_beta = 38)
 }
 
@@ -126,9 +171,11 @@ nowcast_series_data <- function(snapshots, column, onset_knot_days = 14) {
     # the additions
     w_max = pmax(0L, -tri$n) + 6L + as.integer(ceiling(0.5 * abs(tri$n))),
     count_last = last$count, delay_last = last$hi,
-    log_p_ref = nowcast_reference_delay(delay_max, priors$reference_mean, priors$reference_sd),
+    log_p_ref = if(column == "deaths_reported") nowcast_reference_death(delay_max) else
+      nowcast_reference_delay(delay_max, mechanistic_delay_priors()$reporting$mean_mu,
+                              mechanistic_delay_priors()$reporting$sd_mu),
     delay_knots = delay_knots, onset_knots = onset_knots),
-    priors[setdiff(names(priors), c("reference_mean", "reference_sd"))])
+    priors)
 }
 
 #' The data for stan/nowcast_joint.stan
@@ -159,7 +206,7 @@ nowcast_stan_data <- function(analysis, day_target = 0L, grainsize = 64L) {
   stan <- c(cases[shared], list(day_target = as.integer(day_target)),
             f_own(cases, "_c"), list(sigma_lambda_scale_c = cases$sigma_lambda_scale),
             f_own(deaths, "_d"),
-            list(logit_cfr_mu = 0, logit_cfr_sd = 1.5, sigma_cfr_scale = 0.05,
+            list(sigma_cfr_scale = 0.05,
                  grainsize = as.integer(grainsize)))
   list(stan = stan, cases = cases, deaths = deaths)
 }

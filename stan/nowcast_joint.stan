@@ -142,8 +142,6 @@ data {
   real<lower=0> sigma_u_scale_d;
   real<lower=0> rho_scale_d;
   // the case fatality ratio
-  real logit_cfr_mu;
-  real<lower=0> logit_cfr_sd;
   real<lower=0> sigma_cfr_scale;
   int<lower=1> grainsize;              // of reduce_sum
 }
@@ -191,7 +189,8 @@ model {
   log_lambda_1 ~ normal(log(5), 3);
   z_lambda ~ std_normal();
   sigma_lambda ~ normal(0, sigma_lambda_scale_c);
-  logit_cfr_1 ~ normal(logit_cfr_mu, logit_cfr_sd);
+  // a uniform prior on the case fatality ratio of the first onset day
+  logit_cfr_1 ~ logistic(0, 1);
   z_cfr ~ std_normal();
   sigma_cfr ~ normal(0, sigma_cfr_scale);
   beta_g_free_c ~ normal(0, beta_g_scale_c);

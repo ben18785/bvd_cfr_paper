@@ -9,9 +9,10 @@
 # (Actions > mechanistic > Run workflow), or by a push which changes
 # runs/mechanistic.txt, whose lines (each optional)
 #   dates: <mmdd,...>       the fits (default all)
-#   iterations: <n>         of each chain in all (default 3000)
-#   ridge: true             adds the joint move of the fraction counted on the
-#                           day of death and the delay to a death being recorded
+#   iterations: <n>         of each chain in all (default 6000)
+#   ridge: false            leaves out the joint move of the fraction counted on
+#                           the day of death and the delay to a death being
+#                           recorded (made by default)
 #   continue: <run id>      carries on the chains of that run
 #   rounds: <n>             how many more runs may follow, each carrying on
 #                           the one before, until every chain has its iterations
@@ -37,11 +38,11 @@ on:
       iterations:
         description: "Iterations of each chain in all"
         required: false
-        default: "3000"
+        default: "6000"
       ridge:
-        description: "Add the ridge move (true or false)"
+        description: "Make the ridge move (true or false)"
         required: false
-        default: "false"
+        default: "true"
       continue_from:
         description: "The id of an earlier run whose chains are carried on"
         required: false
@@ -64,7 +65,7 @@ permissions:
   actions: write
 
 env:
-  PACKAGE: github::ben18785/incidenceinflation_2.0@7f79c33
+  PACKAGE: github::ben18785/incidenceinflation_2.0@a88dcf1
 
 jobs:
   plan:
@@ -97,8 +98,8 @@ jobs:
           dates="${IN_DATES:-$all}"
           {
             echo "dates=$dates"
-            echo "iterations=${IN_ITERATIONS:-3000}"
-            echo "ridge=$([ "$IN_RIDGE" = "true" ] && echo 1 || echo 0)"
+            echo "iterations=${IN_ITERATIONS:-6000}"
+            echo "ridge=$([ "$IN_RIDGE" = "false" ] && echo 0 || echo 1)"
             echo "continue_from=$IN_CONTINUE"
             echo "rounds=${IN_ROUNDS:-0}"
             echo "time_limit=${IN_TIME_LIMIT:-320}"

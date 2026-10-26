@@ -5,7 +5,8 @@
 # onset to death and a delay which is estimated; a fraction of fatal cases are
 # counted on their day of death, not of onset (the exact form); a death
 # brings about the report of its case if it has not already been reported
-# (the share of such fatal cases held at 0.95); and deaths recorded after a
+# (all such fatal cases, since the deaths in the reports are among the
+# cases); and deaths recorded after a
 # long delay (the backlog) have a delay of their own. The fits sample all of
 # this by MCMC, one chain at a time, carried on across runs since a chain can
 # need more than the six hours a GitHub job allows.
@@ -48,12 +49,39 @@ mechanistic_analysis <- function(snapshots, date_now, date_first = "2026-05-11",
   analysis
 }
 
+#' The priors of the delays, shared with the data-driven model
+#'
+#' The centres of the gamma delay to a case being reported: its mean has a
+#' gamma prior with mean 16 and sd 10 days, between the mean delay from
+#' onset to notification of the outbreaks in the DRC of 1995 to 2014 (9.5
+#' days; Rosello et al. 2015) and that from onset to a situation report in
+#' North Kivu and Ituri in September 2018 (23 days; Tariq et al. 2019); its
+#' sd has a gamma prior with mean 13 and sd 8 days, the sd of those delays
+#' being about 0.8 of their mean (both priors with the same sd relative to
+#' their mean). The centres of the delay from death to a
+#' death being recorded have gamma priors with mean 4 and sd 4 days; the time
+#' from onset to death is gamma with mean 9.3 and sd 5.5 days, from past
+#' outbreaks. The backlog's share and rate are the centres of the package's
+#' priors on them (logit share ~ N(logit 0.2, 1), log rate ~ N(log 1/60, 1)),
+#' which the fits use.
+#'
+#' @return a named list: 'reporting' and 'recording' (mean_mu, mean_sigma,
+#'   sd_mu and sd_sigma: the mean and sd of the gamma priors on the centres
+#'   of the mean and sd of each delay), 'onset_to_death' (mean, sd) and
+#'   'backlog' (share and rate: the centres of their priors)
+mechanistic_delay_priors <- function() {
+  list(reporting = list(mean_mu = 16, mean_sigma = 10, sd_mu = 13, sd_sigma = 8),
+       recording = list(mean_mu = 4, mean_sigma = 4, sd_mu = 4, sd_sigma = 4),
+       onset_to_death = list(mean = 9.3, sd = 5.5),
+       backlog = list(share = 0.2, rate = 1 / 60))
+}
+
 #' The settings of the model of deaths
 #'
 #' The time from onset to death is gamma with mean 9.3 and sd 5.5 days (from
 #' past outbreaks); the fraction of fatal cases counted on their day of death
 #' has a uniform prior; the share of fatal cases reported when their death is
-#' recorded is held at 0.95; the delay to a death being recorded is the same
+#' recorded is held at 1; the delay to a death being recorded is the same
 #' for all onset days up to 31 July; and deaths are held in the backlog for at
 #' least 21 days.
 #'
@@ -63,12 +91,12 @@ mechanistic_analysis <- function(snapshots, date_now, date_first = "2026-05-11",
 #'   incidenceinflation::mcmc_single
 mechanistic_settings <- function(ridge = FALSE) {
   list(
-    onset_to_death = list(mean = 9.3, sd = 5.5),
+    onset_to_death = mechanistic_delay_priors()$onset_to_death,
     dated_by_death = c(list(fraction = list(alpha = 1, beta = 1, initial = 0.25), exact = TRUE),
                        if(ridge) list(ridge = TRUE)),
     initial_delay = list(mean = 3, sd = 2.5),
-    delay_prior = list(mean_mu = 4, mean_sigma = 4, sd_mu = 4, sd_sigma = 4),
-    triggered = list(initial = 0.95, n_steps = 0L),
+    delay_prior = mechanistic_delay_priors()$recording,
+    triggered = list(initial = 1, n_steps = 0L),
     fatal_delay = FALSE,
     recording_fixed_until = "2026-07-31",
     recording_backlog = list(hold_days = 21L))
@@ -129,10 +157,14 @@ fit_mechanistic_chain <- function(analysis, chain, path, state, iterations,
   delay_changepoints <- list(min_length = 14, n_partition_moves = 50)
   priors <- list(
     Rt = list(shape = 1, rate = 1),
-    reporting = list(mean_mu = 7, mean_sigma = 10, sd_mu = 5, sd_sigma = 5),
+    reporting = mechanistic_delay_priors()$reporting,
     max_cases = ceiling(4 * max(initial_cases_true$cases_true) + 50),
     overdispersion = list(mean = 20, sd = 20),
-    revisions = list(eta_mu = 0.005, eta_sigma = 0.005, rho_alpha = 1, rho_beta = 4),
+    # wrong records: about 0.03 per genuine record are withdrawn between
+    # reports, and the correction of 6 September removed at least 8.5% of the
+    # records of the onset days it corrected; the daily chance of a wrong
+    # record being withdrawn is uniform
+    revisions = list(eta_mu = 0.1, eta_sigma = 0.1, rho_alpha = 1, rho_beta = 1),
     max_erroneous = max_erroneous,
     reporting_effects = list(tail_weight_alpha = 1, tail_weight_beta = 19,
                              tail_mean_mu = 40, tail_mean_sigma = 30),
