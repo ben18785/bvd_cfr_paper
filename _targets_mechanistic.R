@@ -14,10 +14,10 @@
 # files already in fits_mechanistic/ instead of fitting, and the rest of the
 # pipeline (the checks of convergence, tables and plots) is made from them.
 #
-# BVD_ITERATIONS (default 3000) sets the iterations of each chain in all,
+# BVD_ITERATIONS (default 6000) sets the iterations of each chain in all,
 # BVD_TIME_LIMIT (minutes, default none) when a chain stops to be carried on
-# later, BVD_RIDGE=1 adds the joint move of the fraction counted on the day of
-# death and the delay to a death being recorded, and BVD_DATES (mmdd,
+# later, BVD_RIDGE=0 leaves out the joint move of the fraction counted on the
+# day of death and the delay to a death being recorded (made by default), and BVD_DATES (mmdd,
 # separated by commas) which fits are made (by default all).
 
 library(targets)
@@ -25,10 +25,10 @@ library(targets)
 tar_option_set(packages = c("dplyr", "tidyr", "ggplot2"))
 tar_source(c("R/data.R", "R/nowcast.R", "R/mechanistic.R"))
 
-iterations <- as.integer(Sys.getenv("BVD_ITERATIONS", "3000"))
+iterations <- as.integer(Sys.getenv("BVD_ITERATIONS", "6000"))
 time_limit <- suppressWarnings(as.numeric(Sys.getenv("BVD_TIME_LIMIT", "")))
 if(is.na(time_limit)) time_limit <- NULL
-ridge <- Sys.getenv("BVD_RIDGE", "") == "1"
+ridge <- Sys.getenv("BVD_RIDGE", "") != "0"
 from_files <- Sys.getenv("BVD_FITS_FROM_FILES", "") == "1"
 n_chains <- 4L
 
