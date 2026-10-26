@@ -139,9 +139,8 @@ comparison_thin <- function(m, n) {
 #' projections. The delay is lognormal, its parameters changing as a random
 #' walk by week of onset, with effects of the day of the week of the report;
 #' the growth of the expected counts is a random walk by week. The eventual
-#' count of each onset day (up to the longest delay) is the sum of the new
-#' counts of its days in the likelihood and the predicted new counts of the
-#' others.
+#' count of each onset day is its count in the last report up to the fit
+#' date and the predicted new counts after it, up to the longest delay.
 #'
 #' @param snapshots as build_bvd_snapshots
 #' @param date_now the fit date
@@ -210,14 +209,19 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
       comparison_thin(sweep(add, 2, now$now, "+"), settings$n_draws)
     })
     names(draws) <- as.character(reports$date_report)
-    # the eventual count of each onset day: the new counts in the likelihood,
-    # and the predicted new counts of the other days
-    key <- function(x) paste(as.Date(x$reference_date), as.Date(x$report_date))
-    observed <- grid$.observed[match(key(cells), key(grid))]
-    stopifnot(!anyNA(observed))
-    values <- pp
-    values[, observed] <- rep(cells$new_confirm[observed], each = nrow(pp))
-    eventual <- t(rowsum(t(values), as.character(as.Date(cells$reference_date))))
+    # the eventual count of each onset day: its count in the last report up
+    # to the fit date, and the predicted new counts after it (up to the
+    # longest delay), as for the projections
+    latest <- counts %>% dplyr::group_by(.data$date_onset) %>%
+      dplyr::summarise(now = .data$count[which.max(.data$date_reported)])
+    latest <- dplyr::coalesce(latest$now[match(onsets, latest$date_onset)], 0L)
+    later <- which(as.Date(cells$report_date) > date_now)
+    eventual <- matrix(0, nrow(pp), length(onsets), dimnames = list(NULL, as.character(onsets)))
+    if(length(later) > 0) {
+      by_onset <- t(rowsum(t(pp[, later, drop = FALSE]), as.character(as.Date(cells$reference_date[later]))))
+      eventual[, colnames(by_onset)] <- by_onset
+    }
+    eventual <- sweep(eventual, 2, latest, "+")
     eventual <- comparison_thin(eventual[, as.character(onsets), drop = FALSE], settings$n_draws)
     list(projections = list(model = "epinowcast", series = sub("_reported", "", column),
                             date_now = date_now, onsets = scored, draws = draws),
