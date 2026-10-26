@@ -17,9 +17,13 @@ comparison_settings <- function() {
        max_age = 41L,
        weeks = 1:6,
        n_draws = 1000L,
+       # epinowcast's growth rate follows a weekly random walk, rather than
+       # its default of a separate effect for each day, which with the few
+       # deaths a day left two of the fits to deaths unconverged
        epinowcast = list(max_delay = 60L, chains = 4L, iter_warmup = 1000L,
                          iter_sampling = 1000L, adapt_delta = 0.95,
-                         max_treedepth = 12L),
+                         max_treedepth = 12L,
+                         reference = ~ 1 + rw(week), expectation = ~ 1 + rw(week)),
        # baselinenowcast takes only onset days whose reports are seen from the
        # day of onset, so from the first report
        baselinenowcast = list(max_delay = 28L, start = as.Date("2026-07-12"),
@@ -170,9 +174,9 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
     start <- Sys.time()
     fit <- epinowcast::epinowcast(
       pobs,
-      reference = epinowcast::enw_reference(~ 1 + rw(week), distribution = "lognormal", data = pobs),
+      reference = epinowcast::enw_reference(s$reference, distribution = "lognormal", data = pobs),
       report = epinowcast::enw_report(~ (1 | day_of_week), data = pobs),
-      expectation = epinowcast::enw_expectation(~ 0 + (1 | day), data = pobs),
+      expectation = epinowcast::enw_expectation(s$expectation, data = pobs),
       obs = epinowcast::enw_obs(family = "negbin", observation_indicator = ".observed", data = pobs),
       fit = epinowcast::enw_fit_opts(chains = s$chains, parallel_chains = s$chains,
                                      iter_warmup = s$iter_warmup, iter_sampling = s$iter_sampling,
@@ -344,7 +348,8 @@ comparison_log_score <- function(y, x) {
 #' For each onset day and report: the CRPS of the count and of log(count + 1),
 #' the log score (comparison_log_score), the randomised probability integral
 #' transform, and the 50% and 90% intervals (whether they hold the count, and
-#' their widths). Draws which are not finite or are negative are left out,
+#' their widths), and whether the draws are all one value (point: a log score
+#' of 0 if it is the count). Draws which are not finite or are negative are left out,
 #' with a warning, and counted (n_bad, with the smallest of them, min_bad).
 #'
 #' @param projections as described above
@@ -379,7 +384,8 @@ comparison_score <- function(projections, truth, seed = 1) {
                     pit = lower + stats::runif(1) * (mean(x <= y) - lower),
                     p50 = q[3],
                     in50 = y >= q[2] & y <= q[4], in90 = y >= q[1] & y <= q[5],
-                    width50 = q[4] - q[2], width90 = q[5] - q[1], n_bad = sum(bad), min_bad = min_bad)
+                    width50 = q[4] - q[2], width90 = q[5] - q[1], n_bad = sum(bad), min_bad = min_bad,
+                    point = all(x == x[1]))
     })
     dplyr::bind_cols(rows, dplyr::bind_rows(scores))
   })) %>% dplyr::mutate(model = projections$model, .before = 1)
@@ -389,7 +395,10 @@ comparison_score <- function(projections, truth, seed = 1) {
 #'
 #' 'common' keeps the onset days which every model scored, so that the
 #' models are compared on the same counts; 'own' takes each model on all the
-#' days it scored. The log score is summed over the onset days of each fit
+#' days it scored; 'uncertain' keeps those of the common days on which no
+#' model's draws are all one value, since a model which projects that a count
+#' will not change scores a log score of 0 when it does not, which no model
+#' allowing for a change can match. The log score is summed over the onset days of each fit
 #' date and report, and the sums averaged over them (log_score_sum), as well
 #' as averaged over days (log_score); days given no probability (a log score
 #' of -Inf) are counted (no_probability), and log_score_sum_finite leaves them
@@ -397,13 +406,17 @@ comparison_score <- function(projections, truth, seed = 1) {
 #'
 #' @param scores the scores of all the models (comparison_score)
 #' @param by the columns to summarise by, besides model and series
-#' @return a tibble with a column 'set' ("common" or "own")
+#' @return a tibble with a column 'set' ("common", "uncertain" or "own")
 comparison_summary <- function(scores, by = "week") {
   scored <- dplyr::filter(scores, .data$no_fall)
   n_models <- dplyr::n_distinct(scored$model)
   common <- scored %>%
     dplyr::group_by(.data$series, .data$date_now, .data$date_report, .data$date_onset) %>%
     dplyr::filter(dplyr::n_distinct(.data$model) == n_models) %>%
+    dplyr::ungroup()
+  uncertain <- common %>%
+    dplyr::group_by(.data$series, .data$date_now, .data$date_report, .data$date_onset) %>%
+    dplyr::filter(!any(.data$point)) %>%
     dplyr::ungroup()
   f <- function(x) {
     sums <- x %>%
@@ -425,7 +438,7 @@ comparison_summary <- function(scores, by = "week") {
                        .groups = "drop") %>%
       dplyr::left_join(sums, by = c("model", "series", by))
   }
-  dplyr::bind_rows(common = f(common), own = f(scored), .id = "set")
+  dplyr::bind_rows(common = f(common), uncertain = f(uncertain), own = f(scored), .id = "set")
 }
 
 #' The age band of an onset day at the fit date

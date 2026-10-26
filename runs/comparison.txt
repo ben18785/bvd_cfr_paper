@@ -1,6 +1,4 @@
 # The comparison of nowcasts (.github/workflows/comparison.yml): a push which
 # changes this file starts a run.
 data_driven_run: 40218377607
-# the epinowcast fits of this run are reused, not run again
-epinowcast_run: 40303064256
-# rerun 2: negative draws left out too
+# epinowcast refitted with a weekly random walk on its growth rate
