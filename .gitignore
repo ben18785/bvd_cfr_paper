@@ -17,3 +17,6 @@ stan/*
 _targets_mechanistic/
 fits_mechanistic/
 states_mechanistic/
+# the comparison pipeline's store and fits
+_targets_comparison/
+fits_comparison/

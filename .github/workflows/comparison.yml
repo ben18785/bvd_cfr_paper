@@ -1,0 +1,146 @@
+# The comparison of nowcasts (_targets_comparison.R): each epinowcast fit
+# (cases and deaths at one fit date) is a job of its own, which saves its
+# projections; a last job takes them and the chains of a run of the
+# data-driven workflow, fits baselinenowcast, projects the data-driven fits,
+# scores all of them and makes the tables and plots, which it uploads as the
+# artifact comparison-outputs. Started by hand (Actions > comparison > Run
+# workflow), or by a push which changes runs/comparison.txt, whose lines
+# 'dates: <mmdd,...>' and 'data_driven_run: <run id>' set the run (as the
+# inputs of a run by hand do).
+#
+# Needs the repository secret BVD_DATA_KEY, the passphrase of
+# data/bvd_data.tar.gz.enc.
+
+name: comparison
+
+on:
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: "Fit dates as mmdd, separated by commas (empty for all)"
+        required: false
+        default: ""
+      data_driven_run:
+        description: "The run of the data-driven workflow whose chains are projected"
+        required: true
+  push:
+    paths:
+      - runs/comparison.txt
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  COMPARISON_PACKAGES: >-
+    install.packages(c("baselinenowcast", "scoringRules", "data.table"), repos = "https://cloud.r-project.org");
+    install.packages("epinowcast", repos = c("https://epinowcast.r-universe.dev", "https://cloud.r-project.org"))
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      dates: ${{ steps.plan.outputs.dates }}
+      labels: ${{ steps.plan.outputs.labels }}
+      data_driven_run: ${{ steps.plan.outputs.data_driven_run }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          IN_DATES: ${{ inputs.dates }}
+          IN_RUN: ${{ inputs.data_driven_run }}
+        run: |
+          f_line() { [ -f runs/comparison.txt ] && sed -n "s/^$1:[[:space:]]*//p" runs/comparison.txt | head -n 1 | tr -d '[:space:]'; }
+          if [ "${{ github.event_name }}" = "push" ]; then
+            IN_DATES=$(f_line dates); IN_RUN=$(f_line data_driven_run)
+          fi
+          all="0801,0809,0819,0826,0902,0909,0916,0924,0930,1007"
+          dates="${IN_DATES:-$all}"
+          [ -n "$IN_RUN" ] || { echo "No run of the data-driven workflow given."; exit 1; }
+          echo "dates=$dates" >> "$GITHUB_OUTPUT"
+          echo "data_driven_run=$IN_RUN" >> "$GITHUB_OUTPUT"
+          labels=$(python3 -c "
+          import json, sys
+          print(json.dumps([d.strip() for d in sys.argv[1].split(',') if d.strip()]))" "$dates")
+          echo "labels=$labels" >> "$GITHUB_OUTPUT"
+          echo "$labels"
+
+  fit:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    name: epinowcast ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        label: ${{ fromJson(needs.plan.outputs.labels) }}
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      BVD_DATES: ${{ needs.plan.outputs.dates }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Install the nowcasting packages
+        run: Rscript -e '${{ env.COMPARISON_PACKAGES }}'
+      - name: Restore the data
+        env:
+          BVD_DATA_KEY: ${{ secrets.BVD_DATA_KEY }}
+        run: |
+          printf '%s' "$BVD_DATA_KEY" > "$RUNNER_TEMP/bvd_data_key"
+          BVD_DATA_KEY_FILE="$RUNNER_TEMP/bvd_data_key" scripts/decrypt_bvd_data.sh
+          rm "$RUNNER_TEMP/bvd_data_key"
+      - name: Fit epinowcast
+        run: |
+          Rscript -e 'targets::tar_make(names = "epinowcast_${{ matrix.label }}", script = "_targets_comparison.R", store = "_targets_comparison", reporter = "timestamp")'
+          Rscript -e 'print(readRDS("fits_comparison/epinowcast_${{ matrix.label }}.rds")$diagnostics)'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: epinowcast-${{ matrix.label }}
+          path: fits_comparison/epinowcast_${{ matrix.label }}.rds
+          retention-days: 30
+
+  collect:
+    needs: [plan, fit]
+    # after the fits, even if some failed, but not if the run was cancelled
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      BVD_FITS_FROM_FILES: "1"
+      BVD_DATES: ${{ needs.plan.outputs.dates }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Install the nowcasting packages
+        run: Rscript -e '${{ env.COMPARISON_PACKAGES }}'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: epinowcast-*
+          path: fits_comparison
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fit-*
+          path: fits
+          merge-multiple: true
+          run-id: ${{ needs.plan.outputs.data_driven_run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore the data
+        env:
+          BVD_DATA_KEY: ${{ secrets.BVD_DATA_KEY }}
+        run: |
+          printf '%s' "$BVD_DATA_KEY" > "$RUNNER_TEMP/bvd_data_key"
+          BVD_DATA_KEY_FILE="$RUNNER_TEMP/bvd_data_key" scripts/decrypt_bvd_data.sh
+          rm "$RUNNER_TEMP/bvd_data_key"
+      - name: Project, score and summarise
+        run: |
+          ls -l fits fits_comparison
+          Rscript -e 'targets::tar_make(script = "_targets_comparison.R", store = "_targets_comparison", reporter = "timestamp")'
+          Rscript -e 'x <- read.csv("outputs/comparison/summary_by_week.csv"); print(x[x$set == "common", c("model", "series", "week", "n", "crps_log", "coverage50", "coverage90", "log_score_sum_finite", "no_probability")], digits = 3)' | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: comparison-outputs
+          path: outputs/comparison
+          retention-days: 90
