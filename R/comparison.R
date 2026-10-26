@@ -133,11 +133,15 @@ comparison_thin <- function(m, n) {
 #' a report day enters the likelihood only if the day before also had a
 #' report (or it is the day of onset): otherwise it lumps several days
 #' together. So the onset days before the first report enter only through
-#' their later reports. The grid runs on to the last report, its days after
-#' the fit date out of the likelihood, so that the fit's predictions of them
-#' are the projections. The delay is lognormal, its parameters changing as a
-#' random walk by week of onset, with effects of the day of the week of the
-#' report; the expected counts follow a daily random walk of their growth.
+#' their later reports. The grid runs on to the last report, or to the
+#' longest delay after the fit date if that is later, its days after the fit
+#' date out of the likelihood, so that the fit's predictions of them are the
+#' projections. The delay is lognormal, its parameters changing as a random
+#' walk by week of onset, with effects of the day of the week of the report;
+#' the growth of the expected counts is a random walk by week. The eventual
+#' count of each onset day (up to the longest delay) is the sum of the new
+#' counts of its days in the likelihood and the predicted new counts of the
+#' others.
 #'
 #' @param snapshots as build_bvd_snapshots
 #' @param date_now the fit date
@@ -156,7 +160,8 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
     counts <- comparison_monotone(snapshots, column, date_now) %>%
       dplyr::filter(.data$date_onset >= settings$date_first)
     grid <- tidyr::crossing(reference_date = onsets,
-                            report_date = seq(settings$date_first, settings$date_last, by = "day")) %>%
+                            report_date = seq(settings$date_first,
+                                              max(settings$date_last, date_now + s$max_delay), by = "day")) %>%
       dplyr::filter(.data$report_date >= .data$reference_date,
                     .data$report_date <= .data$reference_date + s$max_delay) %>%
       dplyr::left_join(dplyr::select(counts, reference_date = "date_onset",
@@ -205,8 +210,19 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
       comparison_thin(sweep(add, 2, now$now, "+"), settings$n_draws)
     })
     names(draws) <- as.character(reports$date_report)
+    # the eventual count of each onset day: the new counts in the likelihood,
+    # and the predicted new counts of the other days
+    key <- function(x) paste(as.Date(x$reference_date), as.Date(x$report_date))
+    observed <- grid$.observed[match(key(cells), key(grid))]
+    stopifnot(!anyNA(observed))
+    values <- pp
+    values[, observed] <- rep(cells$new_confirm[observed], each = nrow(pp))
+    eventual <- t(rowsum(t(values), as.character(as.Date(cells$reference_date))))
+    eventual <- comparison_thin(eventual[, as.character(onsets), drop = FALSE], settings$n_draws)
     list(projections = list(model = "epinowcast", series = sub("_reported", "", column),
                             date_now = date_now, onsets = scored, draws = draws),
+         eventual = list(series = sub("_reported", "", column), date_now = date_now,
+                         onsets = onsets, draws = eventual),
          diagnostics = dplyr::tibble(model = "epinowcast", series = sub("_reported", "", column),
                                      date_now = date_now, max_rhat = fit$max_rhat,
                                      divergent = fit$divergent_transitions,
@@ -215,6 +231,7 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
   })
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   saveRDS(list(projections = lapply(out, `[[`, "projections"),
+               eventual = lapply(out, `[[`, "eventual"),
                diagnostics = dplyr::bind_rows(lapply(out, `[[`, "diagnostics"))), path)
   path
 }
@@ -329,6 +346,87 @@ project_data_driven <- function(paths, snapshots, date_now, settings = compariso
     list(model = "data-driven", series = if(s == "c") "cases" else "deaths",
          date_now = date_now, onsets = scored, draws = draws)
   })
+}
+
+#' The case fatality ratio from the eventual counts of cases and deaths by
+#' onset day
+#'
+#' In each draw, the ratio of the eventual deaths to the eventual cases of
+#' each onset week, and of all the onset days at least min_age days before
+#' the fit date (pooled). Weeks whose last day is fewer than min_age days
+#' before the fit date are marked as recent: most of their deaths are still
+#' to come. The draws of the two series are paired by their order; for
+#' epinowcast, whose fits to cases and to deaths are separate, they are
+#' independent.
+#'
+#' @param cases,deaths draws by onset day of the eventual counts
+#' @param dates the onset days
+#' @param date_now the fit date
+#' @param model the model's name
+#' @param min_age as above
+#' @return a tibble of model, date_now, week (NA for the pooled ratio),
+#'   recent, and the 5%, 50% and 95% quantiles
+comparison_cfr <- function(cases, deaths, dates, date_now, model, min_age = 21) {
+  date_now <- as.Date(date_now)
+  n <- min(nrow(cases), nrow(deaths))
+  cases <- cases[seq_len(n), , drop = FALSE]
+  deaths <- deaths[seq_len(n), , drop = FALSE]
+  week <- as.Date(cut(dates, "week"))
+  f_week <- function(m) t(rowsum(t(m), as.character(week)))
+  ratio <- f_week(deaths) / pmax(f_week(cases), 1)
+  weeks <- as.Date(colnames(ratio))
+  old <- as.numeric(date_now - dates) >= min_age
+  pooled <- rowSums(deaths[, old, drop = FALSE]) / pmax(rowSums(cases[, old, drop = FALSE]), 1)
+  q <- function(x) stats::quantile(x, c(0.05, 0.5, 0.95), names = FALSE)
+  qs <- rbind(t(apply(ratio, 2, q)), q(pooled))
+  recent <- c(as.numeric(date_now - (weeks + 6)) < min_age, FALSE)
+  dplyr::tibble(model = model, date_now = date_now, week = c(weeks, as.Date(NA)), recent = recent,
+                p05 = qs[, 1], p50 = qs[, 2], p95 = qs[, 3])
+}
+
+#' The case fatality ratio of epinowcast's separate fits (comparison_cfr)
+#' @param path the file saved by fit_epinowcast
+#' @param min_age as comparison_cfr
+comparison_cfr_epinowcast <- function(path, min_age = 21) {
+  e <- readRDS(path)$eventual
+  comparison_cfr(e$cases$draws, e$deaths$draws, e$cases$onsets, e$cases$date_now,
+                 "epinowcast", min_age)
+}
+
+#' The case fatality ratio of the data-driven model from the eventual counts
+#' it projects (comparison_cfr), as nowcast_eventual takes them
+#' @inheritParams project_data_driven
+#' @param min_age as comparison_cfr
+comparison_cfr_data_driven <- function(paths, snapshots, date_now, model_file = "stan/nowcast_joint.stan",
+                                       min_age = 21) {
+  date_now <- as.Date(date_now)
+  analysis <- prepare_bvd_reports(snapshots, date_now)
+  data <- nowcast_stan_data(analysis)
+  fit <- nowcast_join_chains(paths)
+  proj <- nowcast_project(fit, data, nowcast_day(analysis, date_now + 365), model_file = model_file)
+  dates <- analysis$dates$date[seq_len(data$stan$T)]
+  comparison_cfr(proj$projected_c, proj$projected_d, dates, date_now, "data-driven", min_age)
+}
+
+#' Plot of the case fatality ratio by onset week at each fit date, of
+#' epinowcast's separate fits and of the data-driven model
+#' @param cfr as comparison_cfr, for both models and all fit dates
+#' @param out the directory
+#' @return the file
+plot_comparison_cfr <- function(cfr, out) {
+  df <- dplyr::filter(cfr, !is.na(.data$week)) %>%
+    dplyr::mutate(fit = format(.data$date_now, "%d %b"),
+                  fit = factor(.data$fit, unique(.data$fit[order(.data$date_now)])))
+  g <- ggplot2::ggplot(df, ggplot2::aes(.data$week, .data$p50, colour = .data$model,
+                                        alpha = ifelse(.data$recent, "recent", "earlier"))) +
+    ggplot2::geom_pointrange(ggplot2::aes(ymin = .data$p05, ymax = .data$p95),
+                             position = ggplot2::position_dodge(width = 3), size = 0.15) +
+    ggplot2::scale_alpha_manual(values = c(earlier = 1, recent = 0.35), name = NULL) +
+    ggplot2::facet_wrap(~ fit, ncol = 5) +
+    ggplot2::coord_cartesian(ylim = c(0, 1)) +
+    ggplot2::labs(x = "Week of onset", y = "Case fatality ratio (median, 90% interval)", colour = NULL) +
+    ggplot2::theme_bw() + ggplot2::theme(legend.position = "bottom")
+  comparison_save(file.path(out, "cfr_by_week.png"), g, 11, 5.5)
 }
 
 #' The log score of a count under a negative binomial with the mean and

@@ -2,3 +2,4 @@
 # changes this file starts a run.
 data_driven_run: 40218377607
 # epinowcast refitted with a weekly random walk on its growth rate
+# and its eventual counts saved, for its case fatality ratio

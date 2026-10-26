@@ -46,7 +46,10 @@ f_fit <- function(date) {
       fit_baselinenowcast(snapshots, .(date)),
       project_data_driven(.(s("chains")), snapshots, .(date), model_file = model_file)))),
     tar_target_raw(paste0("scores_", label), bquote(dplyr::bind_rows(lapply(
-      .(s("projections")), comparison_score, truth = .(s("truth"))))))
+      .(s("projections")), comparison_score, truth = .(s("truth")))))),
+    tar_target_raw(paste0("cfr_", label), bquote(dplyr::bind_rows(
+      comparison_cfr_epinowcast(.(s("epinowcast"))),
+      comparison_cfr_data_driven(.(s("chains")), snapshots, .(date), model_file = model_file))))
   )
 }
 f_all <- function(name) {
@@ -64,6 +67,7 @@ c(
   unlist(lapply(fit_dates, f_fit), recursive = FALSE),
   list(
     tar_target_raw("scores", bquote(dplyr::bind_rows(.(f_all("scores"))))),
+    tar_target_raw("cfr", bquote(dplyr::bind_rows(.(f_all("cfr"))))),
     tar_target_raw("diagnostics", bquote(dplyr::bind_rows(lapply(.(f_all("epinowcast")),
                                                                   function(p) readRDS(p)$diagnostics)))),
     tar_target(summary_week, comparison_summary(scores, "week")),
@@ -80,6 +84,8 @@ c(
         f_csv(summary_week, "summary_by_week.csv"),
         f_csv(summary_age, "summary_by_age.csv"),
         f_csv(diagnostics, "epinowcast_diagnostics.csv"),
+        f_csv(cfr, "cfr.csv"),
+        plot_comparison_cfr(cfr, out),
         plot_comparison_weeks(summary_week, out),
         plot_comparison_pit(scores, out),
         plot_comparison_dates(scores, out))
