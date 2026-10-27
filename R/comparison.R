@@ -17,13 +17,13 @@ comparison_settings <- function() {
        max_age = 41L,
        weeks = 1:6,
        n_draws = 1000L,
-       # epinowcast's growth rate follows a weekly random walk, rather than
-       # its default of a separate effect for each day, which with the few
-       # deaths a day left two of the fits to deaths unconverged
+       # epinowcast's growth rate has its default, a separate effect for each
+       # day: a weekly random walk instead left 9 of the 20 fits unconverged,
+       # against 2
        epinowcast = list(max_delay = 60L, chains = 4L, iter_warmup = 1000L,
                          iter_sampling = 1000L, adapt_delta = 0.95,
                          max_treedepth = 12L,
-                         reference = ~ 1 + rw(week), expectation = ~ 1 + rw(week)),
+                         reference = ~ 1 + rw(week), expectation = ~ 0 + (1 | day)),
        # baselinenowcast takes only onset days whose reports are seen from the
        # day of onset, so from the first report
        baselinenowcast = list(max_delay = 28L, start = as.Date("2026-07-12"),
@@ -138,7 +138,7 @@ comparison_thin <- function(m, n) {
 #' date out of the likelihood, so that the fit's predictions of them are the
 #' projections. The delay is lognormal, its parameters changing as a random
 #' walk by week of onset, with effects of the day of the week of the report;
-#' the growth of the expected counts is a random walk by week. The eventual
+#' the growth of the expected counts has a separate effect for each day. The eventual
 #' count of each onset day is its count in the last report up to the fit
 #' date and the predicted new counts after it, up to the longest delay.
 #'
@@ -375,6 +375,14 @@ comparison_cfr <- function(cases, deaths, dates, date_now, model, min_age = 21) 
   n <- min(nrow(cases), nrow(deaths))
   cases <- cases[seq_len(n), , drop = FALSE]
   deaths <- deaths[seq_len(n), , drop = FALSE]
+  # draws with missing counts (a chain whose predictions failed) are left out
+  ok <- stats::complete.cases(cases) & stats::complete.cases(deaths)
+  if(!all(ok)) {
+    warning(sprintf("%s at %s: %d of %d draws with missing counts left out", model,
+                    format(as.Date(date_now)), sum(!ok), n), call. = FALSE)
+    cases <- cases[ok, , drop = FALSE]
+    deaths <- deaths[ok, , drop = FALSE]
+  }
   week <- as.Date(cut(dates, "week"))
   f_week <- function(m) t(rowsum(t(m), as.character(week)))
   ratio <- f_week(deaths) / pmax(f_week(cases), 1)
