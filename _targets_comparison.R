@@ -13,7 +13,11 @@
 # runs as a job of its own, and saves its projections to fits_comparison/;
 # with BVD_FITS_FROM_FILES=1 the targets take the files already there
 # instead of fitting. BVD_DATES (mmdd, separated by commas) sets which fit
-# dates are compared (by default all before the last report).
+# dates are compared (by default all before the last report). With
+# BVD_MECHANISTIC=1 the mechanistic model is compared too, from the
+# projections of its chains already in fits_comparison/ (mechanistic_<mmdd>_<chain>.rds,
+# made by project_mechanistic_chain on GitHub Actions) and its chains in
+# fits_mechanistic/ (for its case fatality ratio).
 
 library(targets)
 
@@ -21,6 +25,7 @@ tar_option_set(packages = c("dplyr", "tidyr", "ggplot2"))
 tar_source("R")
 
 from_files <- Sys.getenv("BVD_FITS_FROM_FILES", "") == "1"
+with_mechanistic <- Sys.getenv("BVD_MECHANISTIC", "") == "1"
 fit_dates <- as.Date(c("2026-08-01", "2026-08-09", "2026-08-19", "2026-08-26", "2026-09-02",
                        "2026-09-09", "2026-09-16", "2026-09-24", "2026-09-30", "2026-10-07"))
 chosen <- trimws(strsplit(Sys.getenv("BVD_DATES", ""), ",")[[1]])
@@ -34,7 +39,23 @@ f_fit <- function(date) {
   s <- function(name) as.symbol(paste0(name, "_", label))
   path <- sprintf("fits_comparison/epinowcast_%s.rds", label)
   chains <- sprintf("fits/%s_%d.rds", label, 1:4)
-  list(
+  # the chains of the mechanistic fit which there are
+  f_present <- function(paths) {
+    paths <- paths[file.exists(paths)]
+    if(length(paths) == 0)
+      stop(paste("No chains of the mechanistic fit of", date))
+    as.call(c(as.symbol("c"), as.list(paths)))
+  }
+  mechanistic <- if(with_mechanistic) list(
+    tar_target_raw(paste0("mechanistic_", label),
+                   f_present(sprintf("fits_comparison/mechanistic_%s_%d.rds", label, 1:4)),
+                   format = "file"),
+    tar_target_raw(paste0("mechanistic_chains_", label),
+                   f_present(sprintf("fits_mechanistic/%s_%d.rds", label, 1:4)),
+                   format = "file"),
+    tar_target_raw(paste0("mechanistic_projections_", label),
+                   bquote(project_mechanistic(.(s("mechanistic"))))))
+  c(mechanistic, list(
     tar_target_raw(paste0("truth_", label), bquote(comparison_truth(snapshots, .(date)))),
     tar_target_raw(paste0("epinowcast_", label),
                    if(from_files) bquote(.(path)) else
@@ -44,13 +65,14 @@ f_fit <- function(date) {
     tar_target_raw(paste0("projections_", label), bquote(c(
       readRDS(.(s("epinowcast")))$projections,
       fit_baselinenowcast(snapshots, .(date)),
-      project_data_driven(.(s("chains")), snapshots, .(date), model_file = model_file)))),
+      project_data_driven(.(s("chains")), snapshots, .(date), model_file = model_file),
+      .(if(with_mechanistic) bquote(.(s("mechanistic_projections"))$projections))))),
     tar_target_raw(paste0("scores_", label), bquote(dplyr::bind_rows(lapply(
       .(s("projections")), comparison_score, truth = .(s("truth")))))),
     tar_target_raw(paste0("cfr_", label), bquote(dplyr::bind_rows(
       comparison_cfr_epinowcast(.(s("epinowcast"))),
-      comparison_cfr_data_driven(.(s("chains")), snapshots, .(date), model_file = model_file))))
-  )
+      comparison_cfr_data_driven(.(s("chains")), snapshots, .(date), model_file = model_file),
+      .(if(with_mechanistic) bquote(mechanistic_cfr(.(s("mechanistic_chains")))))))))
 }
 f_all <- function(name) {
   as.call(c(as.symbol("list"), lapply(format(fit_dates, "%m%d"),
@@ -70,6 +92,9 @@ c(
     tar_target_raw("cfr", bquote(dplyr::bind_rows(.(f_all("cfr"))))),
     tar_target_raw("diagnostics", bquote(dplyr::bind_rows(lapply(.(f_all("epinowcast")),
                                                                   function(p) readRDS(p)$diagnostics)))),
+    tar_target_raw("mechanistic_diagnostics", if(with_mechanistic)
+      bquote(dplyr::bind_rows(lapply(.(f_all("mechanistic_projections")), `[[`, "diagnostics")))
+      else quote(dplyr::tibble())),
     tar_target(summary_week, comparison_summary(scores, "week")),
     tar_target(summary_age, comparison_summary(
       dplyr::mutate(scores, age_band = comparison_age_band(.data$age)), "age_band")),
@@ -84,6 +109,7 @@ c(
         f_csv(summary_week, "summary_by_week.csv"),
         f_csv(summary_age, "summary_by_age.csv"),
         f_csv(diagnostics, "epinowcast_diagnostics.csv"),
+        f_csv(mechanistic_diagnostics, "mechanistic_diagnostics.csv"),
         f_csv(cfr, "cfr.csv"),
         plot_comparison_cfr(cfr, out),
         plot_comparison_weeks(summary_week, out),

@@ -352,6 +352,142 @@ project_data_driven <- function(paths, snapshots, date_now, settings = compariso
   })
 }
 
+#' Projections of one chain of a mechanistic fit to the later reports scored
+#'
+#' For each of n_draws of the chain's kept draws (spread evenly over them),
+#' incidenceinflation::predict_reports simulates the reports scored from the
+#' last report fitted: the split of each onset day's reports is drawn given
+#' the draw, and the later reports from it. The chain's saved state supplies
+#' what does not change between draws. Onset days not in the fit are left
+#' out.
+#'
+#' @param fit_path the chain's draws (as fit_mechanistic_chain saves them)
+#' @param state_path the chain's state file
+#' @param snapshots as build_bvd_snapshots
+#' @param date_now the fit date
+#' @param out the file to save to
+#' @param settings as comparison_settings
+#' @param n_draws the draws projected
+#' @return out, holding a named list of 'chain', 'date_now', 'iterations',
+#'   'onsets' and 'draws' (for cases and for deaths, a list with a matrix of
+#'   draws by onset day for each report, named by its date)
+project_mechanistic_chain <- function(fit_path, state_path, snapshots, date_now, out,
+                                      settings = comparison_settings(), n_draws = 100L) {
+  date_now <- as.Date(date_now)
+  fit <- readRDS(fit_path)
+  variables <- readRDS(state_path)$state$variables
+  if(fit$date_now != date_now)
+    stop("The chain is not of the fit date given.")
+  date0 <- fit$analysis$dates$date[1]
+  f_day <- function(date) as.integer(as.Date(date) - date0) + 1L
+  reports <- comparison_reports(snapshots, date_now, settings)
+  scored <- seq(date_now - settings$max_age, date_now, by = "day")
+  scored <- scored[f_day(scored) %in% variables$deaths_state$onset_times]
+  iterations <- sort(unique(fit$deaths$iteration))
+  iterations <- iterations[unique(round(seq(1, length(iterations),
+                                            length.out = min(n_draws, length(iterations)))))]
+  tables <- c("cases", "reporting_days", "revisions", "reporting_effects", "deaths",
+              "deaths_parameters")
+  set.seed(1000 * fit$chain + as.integer(date_now) %% 1000)
+  simulated <- lapply(iterations, function(it) {
+    draw <- lapply(fit[tables], function(df) df[df$iteration == it, ])
+    incidenceinflation::predict_reports(variables, draw, f_day(reports$date_report),
+                                        onset_times = f_day(scored))
+  })
+  f_series <- function(column) {
+    draws <- lapply(reports$date_report, function(date) {
+      t(vapply(simulated, function(x) {
+        x <- x[x$time_reported == f_day(date), ]
+        as.numeric(x[[column]][match(f_day(scored), x$time_onset)])
+      }, numeric(length(scored))))
+    })
+    stats::setNames(draws, as.character(reports$date_report))
+  }
+  dir.create(dirname(out), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(list(chain = fit$chain, date_now = date_now, iterations = iterations, onsets = scored,
+               draws = list(cases = f_series("cases_reported"),
+                            deaths = f_series("deaths_reported"))), out)
+  out
+}
+
+#' Projections of a mechanistic fit to the later reports scored, from those
+#' of its chains, with checks of their convergence
+#'
+#' @param paths the files of project_mechanistic_chain, one for each chain
+#' @param settings as comparison_settings
+#' @return a named list of 'projections' (as project_data_driven) and
+#'   'diagnostics' (a row for each series: the largest R-hat and smallest
+#'   bulk and tail effective sample sizes of the projected counts, over the
+#'   onset days and reports whose draws are not all one value, and the share
+#'   of them with an R-hat above 1.05)
+project_mechanistic <- function(paths, settings = comparison_settings()) {
+  chains <- lapply(paths, readRDS)
+  date_now <- chains[[1]]$date_now
+  onsets <- chains[[1]]$onsets
+  n <- min(vapply(chains, function(x) length(x$iterations), numeric(1)))
+  out <- lapply(c(cases = "cases", deaths = "deaths"), function(series) {
+    reports <- names(chains[[1]]$draws[[series]])
+    # draws by chain, the last n of each, for each report
+    by_chain <- lapply(reports, function(r) lapply(chains, function(x)
+      utils::tail(x$draws[[series]][[r]], n)))
+    draws <- lapply(by_chain, function(l) comparison_thin(do.call(rbind, l), settings$n_draws))
+    names(draws) <- reports
+    checks <- dplyr::bind_rows(lapply(by_chain, function(l) {
+      dplyr::bind_rows(lapply(seq_along(onsets), function(j) {
+        m <- vapply(l, function(x) x[, j], numeric(n))
+        if(length(unique(as.vector(m))) == 1) return(NULL)
+        dplyr::tibble(rhat = posterior::rhat(m), ess_bulk = posterior::ess_bulk(m),
+                      ess_tail = posterior::ess_tail(m))
+      }))
+    }))
+    list(projection = list(model = "mechanistic", series = series, date_now = date_now,
+                           onsets = onsets, draws = draws),
+         diagnostics = dplyr::tibble(
+           model = "mechanistic", series = series, date_now = date_now,
+           chains = length(chains), draws_per_chain = n, cells = nrow(checks),
+           max_rhat = max(checks$rhat, na.rm = TRUE),
+           share_rhat_over_1.05 = mean(checks$rhat > 1.05, na.rm = TRUE),
+           min_ess_bulk = min(checks$ess_bulk, na.rm = TRUE),
+           min_ess_tail = min(checks$ess_tail, na.rm = TRUE)))
+  })
+  list(projections = unname(lapply(out, `[[`, "projection")),
+       diagnostics = dplyr::bind_rows(lapply(out, `[[`, "diagnostics")))
+}
+
+#' The case fatality ratio of a mechanistic fit from the eventual counts of
+#' its draws (comparison_cfr): every case recorded for an onset day is
+#' eventually reported and every death recorded, and wrong records are
+#' removed, so the eventual counts are the cases and fatal cases recorded for
+#' each day
+#'
+#' @param paths the files of the fit's chains (as fit_mechanistic_chain saves
+#'   them)
+#' @param min_age as comparison_cfr
+mechanistic_cfr <- function(paths, min_age = 21) {
+  chains <- lapply(paths, readRDS)
+  date_now <- chains[[1]]$date_now
+  date0 <- chains[[1]]$analysis$dates$date[1]
+  f_wide <- function(df, column) {
+    df <- df[order(df$iteration, df$time_onset), ]
+    m <- matrix(df[[column]], ncol = length(unique(df$time_onset)), byrow = TRUE)
+    colnames(m) <- sort(unique(df$time_onset))
+    m
+  }
+  counts <- lapply(chains, function(x) {
+    both <- dplyr::inner_join(x$cases, x$deaths, by = c("iteration", "time_onset"))
+    # the fatal cases dated by death out of each day of onset, and into each
+    # day they are recorded for
+    both$out <- both$deaths_true - both$deaths_recorded + both$dated_by_death
+    both$cases_recorded <- both$cases_true - both$out + both$dated_by_death
+    list(cases = f_wide(both, "cases_recorded"), deaths = f_wide(both, "deaths_recorded"))
+  })
+  n <- min(vapply(counts, function(x) nrow(x$cases), numeric(1)))
+  cases <- do.call(rbind, lapply(counts, function(x) utils::tail(x$cases, n)))
+  deaths <- do.call(rbind, lapply(counts, function(x) utils::tail(x$deaths, n)))
+  dates <- date0 + as.integer(colnames(cases)) - 1
+  comparison_cfr(cases, deaths, dates, date_now, "mechanistic", min_age)
+}
+
 #' The case fatality ratio from the eventual counts of cases and deaths by
 #' onset day
 #'

@@ -7,3 +7,8 @@ data_driven_run: 40218377607
 # growth back to the default (the weekly random walk converged worse)
 epinowcast_run: 40477044555
 # collect again on Ubuntu 24.04 (the projections crashed on 26.04)
+# the mechanistic model added: a test of the whole pipeline at one fit date,
+# on the chains of round 1 (not yet converged)
+dates: 0902
+mechanistic_run: 40476887868
+mechanistic_draws: 100

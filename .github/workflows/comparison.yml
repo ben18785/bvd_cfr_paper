@@ -7,7 +7,11 @@
 # workflow), or by a push which changes runs/comparison.txt, whose lines
 # 'dates: <mmdd,...>' and 'data_driven_run: <run id>' set the run (as the
 # inputs of a run by hand do). With 'epinowcast_run: <run id>' the epinowcast
-# fits are not run again but taken from that run of this workflow.
+# fits are not run again but taken from that run of this workflow. With
+# 'mechanistic_run: <run id>' the mechanistic model is compared too: a job for
+# each chain of each fit of that run of the mechanistic workflow projects
+# 'mechanistic_draws' of its draws (default 100) to the reports scored, with
+# the package at the commit of the job's PACKAGE.
 #
 # Needs the repository secret BVD_DATA_KEY, the passphrase of
 # data/bvd_data.tar.gz.enc.
@@ -28,6 +32,14 @@ on:
         description: "A run of this workflow whose epinowcast fits are reused (empty to fit them)"
         required: false
         default: ""
+      mechanistic_run:
+        description: "A run of the mechanistic workflow whose chains are projected (empty to leave the model out)"
+        required: false
+        default: ""
+      mechanistic_draws:
+        description: "Draws of each mechanistic chain projected"
+        required: false
+        default: "100"
   push:
     paths:
       - runs/comparison.txt
@@ -49,6 +61,9 @@ jobs:
       labels: ${{ steps.plan.outputs.labels }}
       data_driven_run: ${{ steps.plan.outputs.data_driven_run }}
       epinowcast_run: ${{ steps.plan.outputs.epinowcast_run }}
+      mechanistic_run: ${{ steps.plan.outputs.mechanistic_run }}
+      mechanistic_draws: ${{ steps.plan.outputs.mechanistic_draws }}
+      chains: ${{ steps.plan.outputs.chains }}
     steps:
       - uses: actions/checkout@v4
       - id: plan
@@ -56,10 +71,13 @@ jobs:
           IN_DATES: ${{ inputs.dates }}
           IN_RUN: ${{ inputs.data_driven_run }}
           IN_ENW: ${{ inputs.epinowcast_run }}
+          IN_MECH: ${{ inputs.mechanistic_run }}
+          IN_MECH_DRAWS: ${{ inputs.mechanistic_draws }}
         run: |
           f_line() { [ -f runs/comparison.txt ] && sed -n "s/^$1:[[:space:]]*//p" runs/comparison.txt | head -n 1 | tr -d '[:space:]'; }
           if [ "${{ github.event_name }}" = "push" ]; then
             IN_DATES=$(f_line dates); IN_RUN=$(f_line data_driven_run); IN_ENW=$(f_line epinowcast_run)
+            IN_MECH=$(f_line mechanistic_run); IN_MECH_DRAWS=$(f_line mechanistic_draws)
           fi
           all="0801,0809,0819,0826,0902,0909,0916,0924,0930,1007"
           dates="${IN_DATES:-$all}"
@@ -67,6 +85,13 @@ jobs:
           echo "dates=$dates" >> "$GITHUB_OUTPUT"
           echo "data_driven_run=$IN_RUN" >> "$GITHUB_OUTPUT"
           echo "epinowcast_run=$IN_ENW" >> "$GITHUB_OUTPUT"
+          echo "mechanistic_run=$IN_MECH" >> "$GITHUB_OUTPUT"
+          echo "mechanistic_draws=${IN_MECH_DRAWS:-100}" >> "$GITHUB_OUTPUT"
+          chains=$(python3 -c "
+          import json, sys
+          dates = [d.strip() for d in sys.argv[1].split(',') if d.strip()]
+          print(json.dumps([{'label': d, 'chain': k} for d in dates for k in range(1, 5)]))" "$dates")
+          echo "chains=$chains" >> "$GITHUB_OUTPUT"
           labels=$(python3 -c "
           import json, sys
           print(json.dumps([d.strip() for d in sys.argv[1].split(',') if d.strip()]))" "$dates")
@@ -108,8 +133,66 @@ jobs:
           path: fits_comparison/epinowcast_${{ matrix.label }}.rds
           retention-days: 30
 
+  mechanistic:
+    needs: plan
+    if: ${{ needs.plan.outputs.mechanistic_run != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    name: mechanistic ${{ matrix.label }} chain ${{ matrix.chain }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.chains) }}
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      # the package with predict_reports (branch predict-reports)
+      PACKAGE: github::ben18785/incidenceinflation_2.0@639e606
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-mechanistic
+      - name: Restore the data
+        env:
+          BVD_DATA_KEY: ${{ secrets.BVD_DATA_KEY }}
+        run: |
+          printf '%s' "$BVD_DATA_KEY" > "$RUNNER_TEMP/bvd_data_key"
+          BVD_DATA_KEY_FILE="$RUNNER_TEMP/bvd_data_key" scripts/decrypt_bvd_data.sh
+          rm "$RUNNER_TEMP/bvd_data_key"
+      - uses: actions/download-artifact@v4
+        with:
+          name: fit-${{ matrix.label }}-${{ matrix.chain }}
+          path: fits_mechanistic
+          run-id: ${{ needs.plan.outputs.mechanistic_run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: state-${{ matrix.label }}-${{ matrix.chain }}
+          path: states_mechanistic
+          run-id: ${{ needs.plan.outputs.mechanistic_run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Project the chain
+        run: |
+          ls -l fits_mechanistic states_mechanistic
+          Rscript -e '
+            suppressMessages(library(dplyr))
+            for(f in list.files("R", full.names = TRUE)) source(f)
+            snapshots <- build_bvd_snapshots(list.files("data/raw/Ebola CFR", pattern = "^Varified.*\\.csv$", full.names = TRUE))
+            label <- "${{ matrix.label }}"; chain <- ${{ matrix.chain }}
+            date_now <- as.Date(paste0("2026-", substr(label, 1, 2), "-", substr(label, 3, 4)))
+            t0 <- Sys.time()
+            out <- project_mechanistic_chain(sprintf("fits_mechanistic/%s_%d.rds", label, chain),
+                                             sprintf("states_mechanistic/%s_%d.rds", label, chain),
+                                             snapshots, date_now,
+                                             sprintf("fits_comparison/mechanistic_%s_%d.rds", label, chain),
+                                             n_draws = ${{ needs.plan.outputs.mechanistic_draws }})
+            cat(sprintf("projected in %.0f minutes\n", as.numeric(Sys.time() - t0, units = "mins")))'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mechanistic-${{ matrix.label }}-${{ matrix.chain }}
+          path: fits_comparison/mechanistic_${{ matrix.label }}_${{ matrix.chain }}.rds
+          retention-days: 30
+
   collect:
-    needs: [plan, fit]
+    needs: [plan, fit, mechanistic]
     # after the fits, even if some failed, but not if the run was cancelled
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-24.04
@@ -118,11 +201,26 @@ jobs:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       BVD_FITS_FROM_FILES: "1"
       BVD_DATES: ${{ needs.plan.outputs.dates }}
+      BVD_MECHANISTIC: ${{ needs.plan.outputs.mechanistic_run != '' && '1' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - name: Install the nowcasting packages
         run: Rscript -e '${{ env.COMPARISON_PACKAGES }}'
+      - uses: actions/download-artifact@v4
+        if: needs.plan.outputs.mechanistic_run != ''
+        with:
+          pattern: mechanistic-*
+          path: fits_comparison
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        if: needs.plan.outputs.mechanistic_run != ''
+        with:
+          pattern: fit-*
+          path: fits_mechanistic
+          merge-multiple: true
+          run-id: ${{ needs.plan.outputs.mechanistic_run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
           pattern: epinowcast-*
@@ -147,8 +245,10 @@ jobs:
       - name: Project, score and summarise
         run: |
           ls -l fits fits_comparison
+          ls fits_mechanistic 2>/dev/null || true
           Rscript -e 'targets::tar_make(script = "_targets_comparison.R", store = "_targets_comparison", reporter = "timestamp")'
           Rscript -e 'x <- read.csv("outputs/comparison/scores.csv"); b <- x[x$n_bad > 0, ]; cat("draws left out:", nrow(b), "scores\n"); if(nrow(b) > 0) print(head(b[, c("model", "series", "date_now", "date_report", "date_onset", "n_bad", "min_bad")], 40))' | tee -a "$GITHUB_STEP_SUMMARY"
+          Rscript -e 'x <- read.csv("outputs/comparison/mechanistic_diagnostics.csv"); if(nrow(x) > 0) print(x, digits = 3)' | tee -a "$GITHUB_STEP_SUMMARY"
           Rscript -e 'x <- read.csv("outputs/comparison/summary_by_week.csv"); print(x[x$set %in% c("common", "uncertain"), c("set", "model", "series", "week", "n", "crps_log", "coverage50", "coverage90", "log_score_sum_finite", "no_probability")], digits = 3)' | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
