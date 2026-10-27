@@ -1,4 +1,7 @@
-dates: 0801
-iterations: 30
-time_limit: 2
-rounds: 2
+# The mechanistic fits (.github/workflows/mechanistic.yml): a push which
+# changes this file starts a run. All fit dates, 6000 iterations per chain and
+# the ridge move (the defaults); up to 8 more rounds carry the chains on.
+# Carries on run 40310410372, whose 9 chains cancelled at the job's time
+# limit start afresh.
+continue: 40310410372
+rounds: 8

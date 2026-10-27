@@ -4,8 +4,9 @@
 # makes the rest of the pipeline (the checks of convergence, tables and
 # plots), which it uploads as the artifact mechanistic-outputs.
 #
-# A chain stops after time_limit minutes (default 320), short of the six
-# hours a job may take, and a later run carries it on. Started by hand
+# A chain stops after time_limit minutes (default 320), or sooner if the
+# setup of its job was slow, so that it is saved within the six hours a job
+# may take, and a later run carries it on. Started by hand
 # (Actions > mechanistic > Run workflow), or by a push which changes
 # runs/mechanistic.txt, whose lines (each optional)
 #   dates: <mmdd,...>       the fits (default all)
@@ -126,6 +127,8 @@ jobs:
       BVD_RIDGE: ${{ needs.plan.outputs.ridge }}
       BVD_TIME_LIMIT: ${{ needs.plan.outputs.time_limit }}
     steps:
+      - name: Note the start of the job
+        run: echo "BVD_JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-mechanistic
       - name: Restore the data
@@ -147,6 +150,12 @@ jobs:
       - name: Run the chain
         run: |
           ls -l states_mechanistic 2>/dev/null || echo "The chain starts afresh."
+          # the chain must stop in time to be saved within the job's 355
+          # minutes, however long the setup took: 25 minutes are kept for that
+          elapsed=$(( ($(date +%s) - BVD_JOB_START) / 60 ))
+          left=$(( 355 - 25 - elapsed ))
+          if [ "$left" -lt "$BVD_TIME_LIMIT" ]; then export BVD_TIME_LIMIT=$left; fi
+          echo "Setup took $elapsed minutes; the chain stops after $BVD_TIME_LIMIT minutes."
           (while sleep 600; do tail -qn 1 fits_mechanistic/*_progress.txt 2>/dev/null; done) &
           Rscript -e 'targets::tar_make(names = "fit_${{ matrix.label }}_${{ matrix.chain }}", script = "_targets_mechanistic.R", store = "_targets_mechanistic", reporter = "timestamp")'
           Rscript -e 'x <- readRDS("fits_mechanistic/${{ matrix.label }}_${{ matrix.chain }}.rds"); cat(sprintf("%d of %d iterations done, %.0f minutes in all\n", x$niterations, x$niterations_target, x$minutes))'
