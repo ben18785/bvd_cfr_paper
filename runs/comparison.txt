@@ -5,3 +5,5 @@ data_driven_run: 40218377607
 # and its eventual counts saved, for its case fatality ratio
 # eventual counts from the last report up to the fit date
 # growth back to the default (the weekly random walk converged worse)
+epinowcast_run: 40477044555
+# collect again on Ubuntu 24.04 (the projections crashed on 26.04)

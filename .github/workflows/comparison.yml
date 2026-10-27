@@ -43,7 +43,7 @@ env:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       dates: ${{ steps.plan.outputs.dates }}
       labels: ${{ steps.plan.outputs.labels }}
@@ -76,7 +76,7 @@ jobs:
   fit:
     needs: plan
     if: ${{ needs.plan.outputs.epinowcast_run == '' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 355
     name: epinowcast ${{ matrix.label }}
     strategy:
@@ -112,7 +112,7 @@ jobs:
     needs: [plan, fit]
     # after the fits, even if some failed, but not if the run was cancelled
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 355
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
