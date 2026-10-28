@@ -376,6 +376,10 @@ project_mechanistic_chain <- function(fit_path, state_path, snapshots, date_now,
   date_now <- as.Date(date_now)
   fit <- readRDS(fit_path)
   variables <- readRDS(state_path)$state$variables
+  # the delays of the fit's variant of the settings (see mechanistic_variant)
+  family <- if(is.null(fit$variant)) NULL else mechanistic_variant(fit$variant)$delay_family
+  old <- options(incidenceinflation.delay_family = if(is.null(family)) "gamma" else family)
+  on.exit(options(old), add = TRUE)
   if(fit$date_now != date_now)
     stop("The chain is not of the fit date given.")
   date0 <- fit$analysis$dates$date[1]

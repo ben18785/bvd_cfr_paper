@@ -108,16 +108,27 @@ mechanistic_settings <- function(ridge = FALSE) {
 #'   prior of the sd of the weekly steps of the backlog's share with scale 0.15
 #'   or 0.05, against 0.5), 'share15_tail' (as share15, and the reporting
 #'   delay of cases with a heavier, exponential tail, whose weight and mean have
-#'   the priors of reporting_effects; without it the delay has no such tail)
-#' @return a list of 'recording_backlog' (settings of the backlog changed) and
-#'   'tail' (the starting weight and mean of the tail, if it is added)
+#'   the priors of reporting_effects; without it the delay has no such tail),
+#'   'share15_lognormal' (as share15, and the reporting delay of cases and the
+#'   delay to a death being recorded log-normal, with the same mean and sd,
+#'   rather than gamma), 'share05_lognormal' (as share05, with the delays
+#'   log-normal), 'hold7' (deaths in the backlog held for at least 7 days
+#'   after the death, against 21)
+#' @return a list of 'recording_backlog' (settings of the backlog changed),
+#'   'tail' (the starting weight and mean of the tail, if it is added) and
+#'   'delay_family' (the option incidenceinflation.delay_family, if set)
 mechanistic_variant <- function(name) {
   variants <- list(
     base = list(),
     share15 = list(recording_backlog = list(share_rw_sd_scale = 0.15)),
     share05 = list(recording_backlog = list(share_rw_sd_scale = 0.05)),
     share15_tail = list(recording_backlog = list(share_rw_sd_scale = 0.15),
-                        tail = list(weight = 0.05, mean = 40)))
+                        tail = list(weight = 0.05, mean = 40)),
+    share15_lognormal = list(recording_backlog = list(share_rw_sd_scale = 0.15),
+                             delay_family = "lognormal"),
+    share05_lognormal = list(recording_backlog = list(share_rw_sd_scale = 0.05),
+                             delay_family = "lognormal"),
+    hold7 = list(recording_backlog = list(hold_days = 7L)))
   if(name == "")
     name <- "base"
   if(!name %in% names(variants))
@@ -205,7 +216,10 @@ fit_mechanistic_chain <- function(analysis, chain, path, state, iterations,
     nrow(analysis$dates))
   deaths_settings$recording_fixed_until <- NULL
   # a variant of the settings (BVD_VARIANT), if any
-  variant <- mechanistic_variant(Sys.getenv("BVD_VARIANT", ""))
+  variant_name <- Sys.getenv("BVD_VARIANT", "")
+  variant <- mechanistic_variant(variant_name)
+  if(!is.null(variant$delay_family))
+    options(incidenceinflation.delay_family = variant$delay_family)
   if(!is.null(variant$recording_backlog))
     deaths_settings$recording_backlog <- utils::modifyList(deaths_settings$recording_backlog,
                                                            variant$recording_backlog)
@@ -255,7 +269,7 @@ fit_mechanistic_chain <- function(analysis, chain, path, state, iterations,
   saveRDS(list(draws = draws, state = state_sampler, iterations = done, minutes = minutes),
           state, compress = "xz")
   kept <- unique(round(seq(floor(done / 2) + 1, done, length.out = n_draws)))
-  out <- list(chain = chain, date_now = analysis$date_now, analysis = analysis,
+  out <- list(variant = variant_name, chain = chain, date_now = analysis$date_now, analysis = analysis,
               ridge = ridge, niterations = done, niterations_target = iterations,
               minutes = minutes, max_erroneous = max_erroneous)
   for(name in intersect(names(draws), c(
