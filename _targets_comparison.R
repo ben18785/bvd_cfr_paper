@@ -72,7 +72,7 @@ f_fit <- function(date) {
     tar_target_raw(paste0("cfr_", label), bquote(dplyr::bind_rows(
       comparison_cfr_epinowcast(.(s("epinowcast"))),
       comparison_cfr_data_driven(.(s("chains")), snapshots, .(date), model_file = model_file),
-      .(if(with_mechanistic) bquote(mechanistic_cfr(.(s("mechanistic_chains")))))))))
+      .(if(with_mechanistic) bquote(mechanistic_cfr(.(s("mechanistic_chains"))))))))))
 }
 f_all <- function(name) {
   as.call(c(as.symbol("list"), lapply(format(fit_dates, "%m%d"),

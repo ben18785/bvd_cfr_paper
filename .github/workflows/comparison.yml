@@ -11,7 +11,9 @@
 # 'mechanistic_run: <run id>' the mechanistic model is compared too: a job for
 # each chain of each fit of that run of the mechanistic workflow projects
 # 'mechanistic_draws' of its draws (default 100) to the reports scored, with
-# the package at the commit of the job's PACKAGE.
+# the package at the commit of the job's PACKAGE; with also
+# 'mechanistic_projected_run: <run id>' those projections are not made again
+# but taken from that run of this workflow.
 #
 # Needs the repository secret BVD_DATA_KEY, the passphrase of
 # data/bvd_data.tar.gz.enc.
@@ -40,6 +42,10 @@ on:
         description: "Draws of each mechanistic chain projected"
         required: false
         default: "100"
+      mechanistic_projected_run:
+        description: "A run of this workflow whose mechanistic projections are reused (empty to make them)"
+        required: false
+        default: ""
   push:
     paths:
       - runs/comparison.txt
@@ -63,6 +69,7 @@ jobs:
       epinowcast_run: ${{ steps.plan.outputs.epinowcast_run }}
       mechanistic_run: ${{ steps.plan.outputs.mechanistic_run }}
       mechanistic_draws: ${{ steps.plan.outputs.mechanistic_draws }}
+      mechanistic_projected_run: ${{ steps.plan.outputs.mechanistic_projected_run }}
       chains: ${{ steps.plan.outputs.chains }}
     steps:
       - uses: actions/checkout@v4
@@ -73,11 +80,13 @@ jobs:
           IN_ENW: ${{ inputs.epinowcast_run }}
           IN_MECH: ${{ inputs.mechanistic_run }}
           IN_MECH_DRAWS: ${{ inputs.mechanistic_draws }}
+          IN_MECH_PROJ: ${{ inputs.mechanistic_projected_run }}
         run: |
           f_line() { [ -f runs/comparison.txt ] && sed -n "s/^$1:[[:space:]]*//p" runs/comparison.txt | head -n 1 | tr -d '[:space:]'; }
           if [ "${{ github.event_name }}" = "push" ]; then
             IN_DATES=$(f_line dates); IN_RUN=$(f_line data_driven_run); IN_ENW=$(f_line epinowcast_run)
             IN_MECH=$(f_line mechanistic_run); IN_MECH_DRAWS=$(f_line mechanistic_draws)
+            IN_MECH_PROJ=$(f_line mechanistic_projected_run)
           fi
           all="0801,0809,0819,0826,0902,0909,0916,0924,0930,1007"
           dates="${IN_DATES:-$all}"
@@ -87,6 +96,7 @@ jobs:
           echo "epinowcast_run=$IN_ENW" >> "$GITHUB_OUTPUT"
           echo "mechanistic_run=$IN_MECH" >> "$GITHUB_OUTPUT"
           echo "mechanistic_draws=${IN_MECH_DRAWS:-100}" >> "$GITHUB_OUTPUT"
+          echo "mechanistic_projected_run=$IN_MECH_PROJ" >> "$GITHUB_OUTPUT"
           chains=$(python3 -c "
           import json, sys
           dates = [d.strip() for d in sys.argv[1].split(',') if d.strip()]
@@ -135,7 +145,7 @@ jobs:
 
   mechanistic:
     needs: plan
-    if: ${{ needs.plan.outputs.mechanistic_run != '' }}
+    if: ${{ needs.plan.outputs.mechanistic_run != '' && needs.plan.outputs.mechanistic_projected_run == '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 355
     name: mechanistic ${{ matrix.label }} chain ${{ matrix.chain }}
@@ -213,6 +223,8 @@ jobs:
           pattern: mechanistic-*
           path: fits_comparison
           merge-multiple: true
+          run-id: ${{ needs.plan.outputs.mechanistic_projected_run || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/download-artifact@v4
         if: needs.plan.outputs.mechanistic_run != ''
         with:

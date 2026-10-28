@@ -12,3 +12,5 @@ epinowcast_run: 40477044555
 dates: 0902
 mechanistic_run: 40476887868
 mechanistic_draws: 100
+# the targets script mended; the projections of that test reused
+mechanistic_projected_run: 40605023290
