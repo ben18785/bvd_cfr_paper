@@ -102,6 +102,29 @@ mechanistic_settings <- function(ridge = FALSE) {
     recording_backlog = list(hold_days = 21L))
 }
 
+#' A variant of the settings, for tuning them by the scores of the nowcasts
+#'
+#' @param name 'base' or "" (none), 'share15' and 'share05' (the half-normal
+#'   prior of the sd of the weekly steps of the backlog's share with scale 0.15
+#'   or 0.05, against 0.5), 'share15_tail' (as share15, and the reporting
+#'   delay of cases with a heavier, exponential tail, whose weight and mean have
+#'   the priors of reporting_effects; without it the delay has no such tail)
+#' @return a list of 'recording_backlog' (settings of the backlog changed) and
+#'   'tail' (the starting weight and mean of the tail, if it is added)
+mechanistic_variant <- function(name) {
+  variants <- list(
+    base = list(),
+    share15 = list(recording_backlog = list(share_rw_sd_scale = 0.15)),
+    share05 = list(recording_backlog = list(share_rw_sd_scale = 0.05)),
+    share15_tail = list(recording_backlog = list(share_rw_sd_scale = 0.15),
+                        tail = list(weight = 0.05, mean = 40)))
+  if(name == "")
+    name <- "base"
+  if(!name %in% names(variants))
+    stop(paste("Unknown variant:", name))
+  variants[[name]]
+}
+
 #' The starting values of a chain: near one another, scaled by the chain
 #' @param chain the chain (1, 2, ...)
 mechanistic_starts <- function(chain) {
@@ -181,6 +204,11 @@ fit_mechanistic_chain <- function(analysis, chain, path, state, iterations,
     as.integer(as.Date(deaths_settings$recording_fixed_until) - analysis$dates$date[1]) + 1L,
     nrow(analysis$dates))
   deaths_settings$recording_fixed_until <- NULL
+  # a variant of the settings (BVD_VARIANT), if any
+  variant <- mechanistic_variant(Sys.getenv("BVD_VARIANT", ""))
+  if(!is.null(variant$recording_backlog))
+    deaths_settings$recording_backlog <- utils::modifyList(deaths_settings$recording_backlog,
+                                                           variant$recording_backlog)
 
   done <- if(is.null(resume)) 0 else resume$iterations
   minutes_before <- if(is.null(resume)) 0 else resume$minutes
@@ -205,8 +233,9 @@ fit_mechanistic_chain <- function(analysis, chain, path, state, iterations,
       initial_overdispersion = start$overdispersion,
       is_negative_binomial = TRUE,
       overdispersion_metropolis_sd = 8,
-      initial_revision_parameters = list(eta = 0.01, rho = 0.2, weekday = TRUE,
-                                         weekday_first = analysis$weekday_first),
+      initial_revision_parameters = c(list(eta = 0.01, rho = 0.2, weekday = TRUE,
+                                           weekday_first = analysis$weekday_first),
+                                      if(!is.null(variant$tail)) list(tail = variant$tail)),
       revision_metropolis_parameters = list(eta_step = 0.3, rho_step = 0.3, pi_step = 0.3),
       cases_before = analysis$cases_before,
       n_parameter_steps = 5,

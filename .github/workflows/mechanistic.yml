@@ -27,7 +27,7 @@
 # data/bvd_data.tar.gz.enc.
 
 name: mechanistic
-run-name: ${{ inputs.continue_from && format('mechanistic (carrying on run {0})', inputs.continue_from) || github.event.head_commit.message || 'mechanistic' }}
+run-name: ${{ inputs.variant && format('mechanistic variant {0}', inputs.variant) || inputs.continue_from && format('mechanistic (carrying on run {0})', inputs.continue_from) || github.event.head_commit.message || 'mechanistic' }}
 
 on:
   workflow_dispatch:
@@ -56,6 +56,14 @@ on:
         description: "Minutes after which a chain stops, to be carried on"
         required: false
         default: "320"
+      variant:
+        description: "A variant of the settings (mechanistic_variant in R/mechanistic.R; empty for none)"
+        required: false
+        default: ""
+      chains:
+        description: "Chains of each fit"
+        required: false
+        default: "4"
   push:
     paths:
       - runs/mechanistic.txt
@@ -79,6 +87,8 @@ jobs:
       continue_from: ${{ steps.plan.outputs.continue_from }}
       rounds: ${{ steps.plan.outputs.rounds }}
       time_limit: ${{ steps.plan.outputs.time_limit }}
+      variant: ${{ steps.plan.outputs.variant }}
+      n_chains: ${{ steps.plan.outputs.n_chains }}
     steps:
       - uses: actions/checkout@v4
       - id: plan
@@ -89,6 +99,8 @@ jobs:
           IN_CONTINUE: ${{ inputs.continue_from }}
           IN_ROUNDS: ${{ inputs.rounds }}
           IN_TIME_LIMIT: ${{ inputs.time_limit }}
+          IN_VARIANT: ${{ inputs.variant }}
+          IN_CHAINS: ${{ inputs.chains }}
         run: |
           f_line() { [ -f runs/mechanistic.txt ] && sed -n "s/^$1:[[:space:]]*//p" runs/mechanistic.txt | head -n 1 | tr -d '[:space:]'; }
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -104,11 +116,13 @@ jobs:
             echo "continue_from=$IN_CONTINUE"
             echo "rounds=${IN_ROUNDS:-0}"
             echo "time_limit=${IN_TIME_LIMIT:-320}"
+            echo "variant=$IN_VARIANT"
+            echo "n_chains=${IN_CHAINS:-4}"
           } | tee -a "$GITHUB_OUTPUT"
           chains=$(python3 -c "
           import json, sys
           dates = [d.strip() for d in sys.argv[1].split(',') if d.strip()]
-          print(json.dumps([{'label': d, 'chain': k} for d in dates for k in range(1, 5)]))" "$dates")
+          print(json.dumps([{'label': d, 'chain': k} for d in dates for k in range(1, int(sys.argv[2]) + 1)]))" "$dates" "${IN_CHAINS:-4}")
           echo "chains=$chains" >> "$GITHUB_OUTPUT"
 
   fit:
@@ -126,6 +140,7 @@ jobs:
       BVD_ITERATIONS: ${{ needs.plan.outputs.iterations }}
       BVD_RIDGE: ${{ needs.plan.outputs.ridge }}
       BVD_TIME_LIMIT: ${{ needs.plan.outputs.time_limit }}
+      BVD_VARIANT: ${{ needs.plan.outputs.variant }}
     steps:
       - name: Note the start of the job
         run: echo "BVD_JOB_START=$(date +%s)" >> "$GITHUB_ENV"
@@ -226,6 +241,7 @@ jobs:
             -f "inputs[iterations]=${{ needs.plan.outputs.iterations }}" \
             -f "inputs[ridge]=$([ '${{ needs.plan.outputs.ridge }}' = '1' ] && echo true || echo false)" \
             -f "inputs[time_limit]=${{ needs.plan.outputs.time_limit }}" \
+            -f "inputs[variant]=${{ needs.plan.outputs.variant }}" -f "inputs[chains]=${{ needs.plan.outputs.n_chains }}" \
             -f "inputs[continue_from]=$GITHUB_RUN_ID" -f "inputs[rounds]=$((ROUNDS - 1))"; then
             echo "Started the next round, carrying on run $GITHUB_RUN_ID ($((ROUNDS - 1)) more may follow)." | tee -a "$GITHUB_STEP_SUMMARY"
           else

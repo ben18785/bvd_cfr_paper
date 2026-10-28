@@ -19,6 +19,7 @@
 # data/bvd_data.tar.gz.enc.
 
 name: comparison
+run-name: ${{ inputs.label || github.event.head_commit.message || 'comparison' }}
 
 on:
   workflow_dispatch:
@@ -44,6 +45,14 @@ on:
         default: "100"
       mechanistic_projected_run:
         description: "A run of this workflow whose mechanistic projections are reused (empty to make them)"
+        required: false
+        default: ""
+      mechanistic_chains:
+        description: "Chains of each mechanistic fit"
+        required: false
+        default: "4"
+      label:
+        description: "A name for the run"
         required: false
         default: ""
   push:
@@ -81,6 +90,7 @@ jobs:
           IN_MECH: ${{ inputs.mechanistic_run }}
           IN_MECH_DRAWS: ${{ inputs.mechanistic_draws }}
           IN_MECH_PROJ: ${{ inputs.mechanistic_projected_run }}
+          IN_MECH_CHAINS: ${{ inputs.mechanistic_chains }}
         run: |
           f_line() { [ -f runs/comparison.txt ] && sed -n "s/^$1:[[:space:]]*//p" runs/comparison.txt | head -n 1 | tr -d '[:space:]'; }
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -100,7 +110,7 @@ jobs:
           chains=$(python3 -c "
           import json, sys
           dates = [d.strip() for d in sys.argv[1].split(',') if d.strip()]
-          print(json.dumps([{'label': d, 'chain': k} for d in dates for k in range(1, 5)]))" "$dates")
+          print(json.dumps([{'label': d, 'chain': k} for d in dates for k in range(1, int(sys.argv[2]) + 1)]))" "$dates" "${IN_MECH_CHAINS:-4}")
           echo "chains=$chains" >> "$GITHUB_OUTPUT"
           labels=$(python3 -c "
           import json, sys
