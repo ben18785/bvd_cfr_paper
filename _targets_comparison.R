@@ -62,11 +62,12 @@ f_fit <- function(date) {
                      bquote(fit_epinowcast(snapshots, .(date), .(path))),
                    format = "file"),
     tar_target_raw(paste0("chains_", label), as.call(c(as.symbol("c"), as.list(chains))), format = "file"),
-    tar_target_raw(paste0("projections_", label), bquote(c(
-      readRDS(.(s("epinowcast")))$projections,
-      fit_baselinenowcast(snapshots, .(date)),
-      project_data_driven(.(s("chains")), snapshots, .(date), model_file = model_file),
-      .(if(with_mechanistic) bquote(.(s("mechanistic_projections"))$projections))))),
+    tar_target_raw(paste0("projections_", label), bquote({
+      p <- c(readRDS(.(s("epinowcast")))$projections,
+             fit_baselinenowcast(snapshots, .(date)),
+             project_data_driven(.(s("chains")), snapshots, .(date), model_file = model_file),
+             .(if(with_mechanistic) bquote(.(s("mechanistic_projections"))$projections)))
+      c(p, comparison_ensemble(p))})),
     tar_target_raw(paste0("scores_", label), bquote(dplyr::bind_rows(lapply(
       .(s("projections")), comparison_score, truth = .(s("truth")))))),
     tar_target_raw(paste0("cfr_", label), bquote(dplyr::bind_rows(

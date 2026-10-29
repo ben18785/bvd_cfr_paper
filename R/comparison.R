@@ -15,12 +15,16 @@
 #' @param name 'base' or "" (none), 'delay90' (the longest delay 90 days,
 #'   against 60), 'rw' (the growth rate a weekly random walk, with adapt_delta
 #'   0.99), 'report_rw' (the effect of the report a weekly random walk as well
-#'   as of the day of the week)
+#'   as of the day of the week), 'delay90_np' (as delay90, with a
+#'   non-parametric effect on the hazard of the delay for each week of delay,
+#'   on top of the log-normal)
 #' @return a list of the settings of comparison_settings()$epinowcast changed
 epinowcast_variant <- function(name) {
   variants <- list(base = list(), delay90 = list(max_delay = 90L),
                    rw = list(expectation = ~ 1 + rw(week), adapt_delta = 0.99),
-                   report_rw = list(report = ~ (1 | day_of_week) + rw(week)))
+                   report_rw = list(report = ~ (1 | day_of_week) + rw(week)),
+                   delay90_np = list(max_delay = 90L, non_parametric = ~ 0 + (1 | delay_week),
+                                     sparse_design = TRUE))
   if(name == "")
     name <- "base"
   if(!name %in% names(variants))
@@ -34,7 +38,7 @@ comparison_settings <- function() {
               iter_sampling = 1000L, adapt_delta = 0.95,
               max_treedepth = 12L,
               reference = ~ 1 + rw(week), expectation = ~ 0 + (1 | day),
-              report = ~ (1 | day_of_week))
+              report = ~ (1 | day_of_week), non_parametric = ~ 0, sparse_design = FALSE)
   list(date_first = as.Date("2026-05-11"),
        date_last = as.Date("2026-10-14"),
        # the onset days scored: those of the last six weeks before the fit date
@@ -147,6 +151,35 @@ comparison_thin <- function(m, n) {
   m[unique(round(seq(1, nrow(m), length.out = min(n, nrow(m))))), , drop = FALSE]
 }
 
+#' An equal mixture of the projections of several models: for each series,
+#' the same number of draws of each model (sampled with replacement), on the
+#' onset days and reports which all of them project
+#'
+#' @param projections a list of projections (as described above) of one fit
+#'   date
+#' @param models the models mixed (those present, if at least two)
+#' @param n the draws of each model
+#' @param seed for the sampling
+#' @return a list of projections of the model 'ensemble' (empty if fewer than
+#'   two models are present)
+comparison_ensemble <- function(projections, models = c("mechanistic", "epinowcast", "data-driven"),
+                                n = 400L, seed = 1) {
+  set.seed(seed)
+  out <- lapply(c("cases", "deaths"), function(se) {
+    p <- Filter(function(x) x$series == se && x$model %in% models, projections)
+    if(length(p) < 2) return(NULL)
+    onsets <- Reduce(intersect, lapply(p, function(x) as.character(x$onsets)))
+    reports <- Reduce(intersect, lapply(p, function(x) names(x$draws)))
+    draws <- stats::setNames(lapply(reports, function(r) do.call(rbind, lapply(p, function(x) {
+      m <- x$draws[[r]][, match(onsets, as.character(x$onsets)), drop = FALSE]
+      m[sample.int(nrow(m), n, replace = nrow(m) < n), , drop = FALSE]
+    }))), reports)
+    list(model = "ensemble", series = se, date_now = p[[1]]$date_now,
+         onsets = as.Date(onsets), draws = draws)
+  })
+  Filter(Negate(is.null), out)
+}
+
 #' Fits epinowcast to the reports up to a fit date, and projects the reports
 #' scored
 #'
@@ -199,7 +232,8 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
     start <- Sys.time()
     fit <- epinowcast::epinowcast(
       pobs,
-      reference = epinowcast::enw_reference(s$reference, distribution = "lognormal", data = pobs),
+      reference = epinowcast::enw_reference(s$reference, distribution = "lognormal",
+                                            non_parametric = s$non_parametric, data = pobs),
       report = epinowcast::enw_report(s$report, data = pobs),
       expectation = epinowcast::enw_expectation(s$expectation, data = pobs),
       obs = epinowcast::enw_obs(family = "negbin", observation_indicator = ".observed", data = pobs),
@@ -207,6 +241,7 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
                                      iter_warmup = s$iter_warmup, iter_sampling = s$iter_sampling,
                                      adapt_delta = s$adapt_delta,
                                      max_treedepth = s$max_treedepth, pp = TRUE,
+                                     sparse_design = s$sparse_design,
                                      show_messages = FALSE, refresh = 0))
     minutes <- as.numeric(difftime(Sys.time(), start, units = "mins"))
     # the predicted new count of every cell of the grid, in the grid's order

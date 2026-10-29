@@ -184,13 +184,17 @@ nowcast_series_data <- function(snapshots, column, onset_knot_days = 14) {
 #' @param name 'base' or "" (knots of the basis in onset time every 14 days
 #'   and the half-normal prior of the sd of the case fatality ratio's walk with
 #'   scale 0.05), 'knots7' and 'knots21' (knots every 7 or 21 days), 'cfr02'
-#'   and 'cfr15' (the scale 0.02 or 0.15)
-#' @return a list of onset_knot_days and sigma_cfr_scale
+#'   and 'cfr15' (the scale 0.02 or 0.15), 'taut01' and 'taut05' (the
+#'   half-normal prior of the sd of the change over onset time of the delay of
+#'   cases with scale 0.1 or 0.5, against 0.2)
+#' @return a list of onset_knot_days, sigma_cfr_scale and tau_t_scale_c (NA
+#'   to keep that of nowcast_priors)
 data_driven_variant <- function(name) {
-  base <- list(onset_knot_days = 14, sigma_cfr_scale = 0.05)
+  base <- list(onset_knot_days = 14, sigma_cfr_scale = 0.05, tau_t_scale_c = NA)
   variants <- list(base = list(), knots7 = list(onset_knot_days = 7),
                    knots21 = list(onset_knot_days = 21),
-                   cfr02 = list(sigma_cfr_scale = 0.02), cfr15 = list(sigma_cfr_scale = 0.15))
+                   cfr02 = list(sigma_cfr_scale = 0.02), cfr15 = list(sigma_cfr_scale = 0.15),
+                   taut01 = list(tau_t_scale_c = 0.1), taut05 = list(tau_t_scale_c = 0.5))
   if(name == "")
     name <- "base"
   if(!name %in% names(variants))
@@ -217,6 +221,8 @@ nowcast_stan_data <- function(analysis, day_target = 0L, grainsize = 64L) {
   cases <- nowcast_series_data(analysis$snapshots, "cases_reported", variant$onset_knot_days)
   deaths <- nowcast_series_data(analysis$snapshots, "deaths_reported", variant$onset_knot_days)
   deaths$d_c <- deaths$D
+  if(!is.na(variant$tau_t_scale_c))
+    cases$tau_t_scale <- variant$tau_t_scale_c
   stopifnot(cases$T == deaths$T, cases$D == deaths$D, cases$R == deaths$R,
             isTRUE(all.equal(cases$Bt, deaths$Bt)))
   shared <- c("T", "D", "Kt", "Bt", "R")
