@@ -22,7 +22,7 @@ runs:
     - uses: actions/cache@v4
       with:
         path: ~/.cmdstan
-        key: cmdstan-${{ runner.os }}-1
+        key: cmdstan-${{ runner.os }}-${{ env.ImageOS }}-1
     - name: Install CmdStan
       shell: bash
       run: Rscript -e 'if(is.null(cmdstanr::cmdstan_version(error_on_NA = FALSE))) cmdstanr::install_cmdstan(cores = 4)'

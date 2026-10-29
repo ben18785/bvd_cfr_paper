@@ -44,7 +44,7 @@ env:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       chains: ${{ steps.plan.outputs.chains }}
       dates: ${{ steps.plan.outputs.dates }}
@@ -76,7 +76,7 @@ jobs:
 
   fit:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 355
     name: fit ${{ matrix.label }} chain ${{ matrix.chain }}
     strategy:
@@ -112,7 +112,7 @@ jobs:
     needs: [plan, fit]
     # after the fits, even if some failed, but not if the run was cancelled
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 355
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
