@@ -11,6 +11,7 @@
 # data/bvd_data.tar.gz.enc.
 
 name: data-driven
+run-name: ${{ inputs.variant && format('data-driven variant {0}', inputs.variant) || github.event.head_commit.message || 'data-driven' }}
 
 on:
   workflow_dispatch:
@@ -27,6 +28,10 @@ on:
         description: "Kept iterations of each chain"
         required: false
         default: "1000"
+      variant:
+        description: "A variant of the settings (data_driven_variant)"
+        required: false
+        default: ""
   push:
     paths:
       - runs/data-driven.txt
@@ -83,6 +88,7 @@ jobs:
       BVD_DATES: ${{ needs.plan.outputs.dates }}
       BVD_ITER_WARMUP: ${{ needs.plan.outputs.iter_warmup }}
       BVD_ITER_SAMPLING: ${{ needs.plan.outputs.iter_sampling }}
+      BVD_DD_VARIANT: ${{ inputs.variant }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -114,6 +120,7 @@ jobs:
       BVD_DATES: ${{ needs.plan.outputs.dates }}
       BVD_ITER_WARMUP: ${{ needs.plan.outputs.iter_warmup }}
       BVD_ITER_SAMPLING: ${{ needs.plan.outputs.iter_sampling }}
+      BVD_DD_VARIANT: ${{ inputs.variant }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup

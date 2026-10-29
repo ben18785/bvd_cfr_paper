@@ -178,6 +178,26 @@ nowcast_series_data <- function(snapshots, column, onset_knot_days = 14) {
     priors)
 }
 
+#' A variant of the settings, for tuning them by the scores of the nowcasts
+#' (set by the environment variable BVD_DD_VARIANT)
+#'
+#' @param name 'base' or "" (knots of the basis in onset time every 14 days
+#'   and the half-normal prior of the sd of the case fatality ratio's walk with
+#'   scale 0.05), 'knots7' and 'knots21' (knots every 7 or 21 days), 'cfr02'
+#'   and 'cfr15' (the scale 0.02 or 0.15)
+#' @return a list of onset_knot_days and sigma_cfr_scale
+data_driven_variant <- function(name) {
+  base <- list(onset_knot_days = 14, sigma_cfr_scale = 0.05)
+  variants <- list(base = list(), knots7 = list(onset_knot_days = 7),
+                   knots21 = list(onset_knot_days = 21),
+                   cfr02 = list(sigma_cfr_scale = 0.02), cfr15 = list(sigma_cfr_scale = 0.15))
+  if(name == "")
+    name <- "base"
+  if(!name %in% names(variants))
+    stop(paste("Unknown variant:", name))
+  utils::modifyList(base, variants[[name]])
+}
+
 #' The data for stan/nowcast_joint.stan
 #'
 #' Those of each series, with the suffixes _c and _d, and the onset days,
@@ -193,8 +213,9 @@ nowcast_series_data <- function(snapshots, column, onset_knot_days = 14) {
 #' @return a named list, with elements 'cases' and 'deaths' holding the data
 #'   of each series and 'stan' the data passed to Stan
 nowcast_stan_data <- function(analysis, day_target = 0L, grainsize = 64L) {
-  cases <- nowcast_series_data(analysis$snapshots, "cases_reported")
-  deaths <- nowcast_series_data(analysis$snapshots, "deaths_reported")
+  variant <- data_driven_variant(Sys.getenv("BVD_DD_VARIANT", ""))
+  cases <- nowcast_series_data(analysis$snapshots, "cases_reported", variant$onset_knot_days)
+  deaths <- nowcast_series_data(analysis$snapshots, "deaths_reported", variant$onset_knot_days)
   deaths$d_c <- deaths$D
   stopifnot(cases$T == deaths$T, cases$D == deaths$D, cases$R == deaths$R,
             isTRUE(all.equal(cases$Bt, deaths$Bt)))
@@ -206,7 +227,7 @@ nowcast_stan_data <- function(analysis, day_target = 0L, grainsize = 64L) {
   stan <- c(cases[shared], list(day_target = as.integer(day_target)),
             f_own(cases, "_c"), list(sigma_lambda_scale_c = cases$sigma_lambda_scale),
             f_own(deaths, "_d"),
-            list(sigma_cfr_scale = 0.05,
+            list(sigma_cfr_scale = variant$sigma_cfr_scale,
                  grainsize = as.integer(grainsize)))
   list(stan = stan, cases = cases, deaths = deaths)
 }

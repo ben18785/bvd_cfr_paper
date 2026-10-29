@@ -9,8 +9,32 @@
 # 'draws', a list with one matrix (draws by onset day) of the projected counts
 # for each report, named by its date.
 
+#' A variant of epinowcast's settings, for tuning them by the scores of the
+#' nowcasts (set by the environment variable BVD_ENW_VARIANT)
+#'
+#' @param name 'base' or "" (none), 'delay90' (the longest delay 90 days,
+#'   against 60), 'rw' (the growth rate a weekly random walk, with adapt_delta
+#'   0.99), 'report_rw' (the effect of the report a weekly random walk as well
+#'   as of the day of the week)
+#' @return a list of the settings of comparison_settings()$epinowcast changed
+epinowcast_variant <- function(name) {
+  variants <- list(base = list(), delay90 = list(max_delay = 90L),
+                   rw = list(expectation = ~ 1 + rw(week), adapt_delta = 0.99),
+                   report_rw = list(report = ~ (1 | day_of_week) + rw(week)))
+  if(name == "")
+    name <- "base"
+  if(!name %in% names(variants))
+    stop(paste("Unknown variant:", name))
+  variants[[name]]
+}
+
 #' The settings of the comparison
 comparison_settings <- function() {
+  enw <- list(max_delay = 60L, chains = 4L, iter_warmup = 1000L,
+              iter_sampling = 1000L, adapt_delta = 0.95,
+              max_treedepth = 12L,
+              reference = ~ 1 + rw(week), expectation = ~ 0 + (1 | day),
+              report = ~ (1 | day_of_week))
   list(date_first = as.Date("2026-05-11"),
        date_last = as.Date("2026-10-14"),
        # the onset days scored: those of the last six weeks before the fit date
@@ -20,10 +44,7 @@ comparison_settings <- function() {
        # epinowcast's growth rate has its default, a separate effect for each
        # day: a weekly random walk instead left 9 of the 20 fits unconverged,
        # against 2
-       epinowcast = list(max_delay = 60L, chains = 4L, iter_warmup = 1000L,
-                         iter_sampling = 1000L, adapt_delta = 0.95,
-                         max_treedepth = 12L,
-                         reference = ~ 1 + rw(week), expectation = ~ 0 + (1 | day)),
+       epinowcast = utils::modifyList(enw, epinowcast_variant(Sys.getenv("BVD_ENW_VARIANT", ""))),
        # baselinenowcast takes only onset days whose reports are seen from the
        # day of onset, so from the first report
        baselinenowcast = list(max_delay = 28L, start = as.Date("2026-07-12"),
@@ -179,7 +200,7 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
     fit <- epinowcast::epinowcast(
       pobs,
       reference = epinowcast::enw_reference(s$reference, distribution = "lognormal", data = pobs),
-      report = epinowcast::enw_report(~ (1 | day_of_week), data = pobs),
+      report = epinowcast::enw_report(s$report, data = pobs),
       expectation = epinowcast::enw_expectation(s$expectation, data = pobs),
       obs = epinowcast::enw_obs(family = "negbin", observation_indicator = ".observed", data = pobs),
       fit = epinowcast::enw_fit_opts(chains = s$chains, parallel_chains = s$chains,

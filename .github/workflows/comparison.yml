@@ -55,6 +55,14 @@ on:
         description: "A name for the run"
         required: false
         default: ""
+      enw_variant:
+        description: "A variant of epinowcast's settings (epinowcast_variant)"
+        required: false
+        default: ""
+      dd_variant:
+        description: "The variant of the data-driven model's settings of its run (data_driven_variant)"
+        required: false
+        default: ""
   push:
     paths:
       - runs/comparison.txt
@@ -131,6 +139,7 @@ jobs:
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       BVD_DATES: ${{ needs.plan.outputs.dates }}
+      BVD_ENW_VARIANT: ${{ inputs.enw_variant }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -222,6 +231,7 @@ jobs:
       BVD_FITS_FROM_FILES: "1"
       BVD_DATES: ${{ needs.plan.outputs.dates }}
       BVD_MECHANISTIC: ${{ needs.plan.outputs.mechanistic_run != '' && '1' || '' }}
+      BVD_DD_VARIANT: ${{ inputs.dd_variant }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
