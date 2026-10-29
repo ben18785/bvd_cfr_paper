@@ -1,0 +1,136 @@
+# EpiLine (R/epiline.R), fitted to the cases only: each fit date is a job
+# of its own, which saves its projections; a last job scores them as the
+# comparison does (comparison_score) and uploads the scores and the
+# diagnostics as the artifact epiline-outputs. Started by hand, or by a push
+# which changes runs/epiline.txt, whose line 'dates: <mmdd,...>' sets the fit
+# dates (a workflow only on a branch other than the default can be started
+# only so).
+#
+# Needs the repository secret BVD_DATA_KEY, the passphrase of
+# data/bvd_data.tar.gz.enc.
+
+name: epiline
+run-name: ${{ inputs.label || github.event.head_commit.message || 'epiline' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: "Fit dates as mmdd, separated by commas"
+        required: false
+        default: ""
+      label:
+        description: "A name for the run"
+        required: false
+        default: ""
+  push:
+    paths:
+      - runs/epiline.txt
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      labels: ${{ steps.plan.outputs.labels }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          IN_DATES: ${{ inputs.dates }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            IN_DATES=$(sed -n "s/^dates:[[:space:]]*//p" runs/epiline.txt | head -n 1 | tr -d '[:space:]')
+          fi
+          labels=$(python3 -c "
+          import json, sys
+          print(json.dumps([d.strip() for d in sys.argv[1].split(',') if d.strip()]))" "$IN_DATES")
+          echo "labels=$labels" >> "$GITHUB_OUTPUT"
+          echo "$labels"
+
+  fit:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    name: epiline ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        label: ${{ fromJson(needs.plan.outputs.labels) }}
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Restore the data
+        env:
+          BVD_DATA_KEY: ${{ secrets.BVD_DATA_KEY }}
+        run: |
+          printf '%s' "$BVD_DATA_KEY" > "$RUNNER_TEMP/bvd_data_key"
+          BVD_DATA_KEY_FILE="$RUNNER_TEMP/bvd_data_key" scripts/decrypt_bvd_data.sh
+          rm "$RUNNER_TEMP/bvd_data_key"
+      - name: Fit EpiLine
+        run: |
+          Rscript -e '
+            suppressMessages(library(dplyr))
+            for(f in list.files("R", full.names = TRUE)) source(f)
+            snapshots <- build_bvd_snapshots(list.files("data/raw/Ebola CFR", pattern = "^Varified.*\\.csv$", full.names = TRUE))
+            label <- "${{ matrix.label }}"
+            date_now <- as.Date(paste0("2026-", substr(label, 1, 2), "-", substr(label, 3, 4)))
+            out <- readRDS(fit_epiline(snapshots, date_now, sprintf("fits_epiline/epiline_%s.rds", label)))
+            print(out$diagnostics)'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: epiline-${{ matrix.label }}
+          path: fits_epiline/epiline_${{ matrix.label }}.rds
+          retention-days: 30
+
+  collect:
+    needs: [plan, fit]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-24.04
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Install scoringRules
+        run: Rscript -e 'install.packages("scoringRules", repos = "https://cloud.r-project.org")'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: epiline-*
+          path: fits_epiline
+          merge-multiple: true
+      - name: Restore the data
+        env:
+          BVD_DATA_KEY: ${{ secrets.BVD_DATA_KEY }}
+        run: |
+          printf '%s' "$BVD_DATA_KEY" > "$RUNNER_TEMP/bvd_data_key"
+          BVD_DATA_KEY_FILE="$RUNNER_TEMP/bvd_data_key" scripts/decrypt_bvd_data.sh
+          rm "$RUNNER_TEMP/bvd_data_key"
+      - name: Score
+        run: |
+          mkdir -p outputs/epiline
+          Rscript -e '
+            suppressMessages(library(dplyr))
+            for(f in list.files("R", full.names = TRUE)) source(f)
+            snapshots <- build_bvd_snapshots(list.files("data/raw/Ebola CFR", pattern = "^Varified.*\\.csv$", full.names = TRUE))
+            fits <- lapply(list.files("fits_epiline", "[.]rds$", full.names = TRUE), readRDS)
+            scores <- bind_rows(lapply(fits, function(x) {
+              p <- x$projections[[1]]
+              comparison_score(p, comparison_truth(snapshots, p$date_now))
+            }))
+            diagnostics <- bind_rows(lapply(fits, `[[`, "diagnostics"))
+            write.csv(scores, "outputs/epiline/scores.csv", row.names = FALSE)
+            write.csv(diagnostics, "outputs/epiline/epiline_diagnostics.csv", row.names = FALSE)
+            print(as.data.frame(diagnostics))
+            print(as.data.frame(scores %>% filter(no_fall) %>% group_by(week) %>%
+              summarise(crps = mean(crps), coverage90 = mean(in90))))' | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: epiline-outputs
+          path: outputs/epiline
+          retention-days: 90

@@ -1,0 +1,3 @@
+# The fit dates of the EpiLine workflow (.github/workflows/epiline.yml): a push
+# which changes this file starts it.
+dates: 0809,0819,0902,0916,0801,0826,0909,0924,0930,1007
