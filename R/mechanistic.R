@@ -113,7 +113,8 @@ mechanistic_settings <- function(ridge = FALSE) {
 #'   delay to a death being recorded log-normal, with the same mean and sd,
 #'   rather than gamma), 'share05_lognormal' (as share05, with the delays
 #'   log-normal), 'hold7' (deaths in the backlog held for at least 7 days
-#'   after the death, against 21)
+#'   after the death, against 21), 'tail' (the tail alone) and 'share05_tail'
+#'   (as share05, with the tail)
 #' @return a list of 'recording_backlog' (settings of the backlog changed),
 #'   'tail' (the starting weight and mean of the tail, if it is added) and
 #'   'delay_family' (the option incidenceinflation.delay_family, if set)
@@ -128,7 +129,10 @@ mechanistic_variant <- function(name) {
                              delay_family = "lognormal"),
     share05_lognormal = list(recording_backlog = list(share_rw_sd_scale = 0.05),
                              delay_family = "lognormal"),
-    hold7 = list(recording_backlog = list(hold_days = 7L)))
+    hold7 = list(recording_backlog = list(hold_days = 7L)),
+    tail = list(tail = list(weight = 0.05, mean = 40)),
+    share05_tail = list(recording_backlog = list(share_rw_sd_scale = 0.05),
+                        tail = list(weight = 0.05, mean = 40)))
   if(name == "")
     name <- "base"
   if(!name %in% names(variants))
