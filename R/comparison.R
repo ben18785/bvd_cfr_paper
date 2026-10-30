@@ -180,6 +180,51 @@ comparison_ensemble <- function(projections, models = c("mechanistic", "epinowca
   Filter(Negate(is.null), out)
 }
 
+#' The terms from which the CRPS of any weighted mixture of several models'
+#' projections follows, for each count scored: with X_i a draw of model i and
+#' y the count, a_i = E|X_i - y| and b_ij = E|X_i - X_j| (X_i and X_j drawn
+#' independently), the CRPS of the mixture with weights w is
+#' sum_i w_i a_i - (1/2) sum_ij w_i w_j b_ij
+#'
+#' @param projections a list of projections of one fit date
+#' @param truth as comparison_truth
+#' @param models the models mixed
+#' @param n the draws of each model used
+#' @param seed for the choice of the draws
+#' @return a tibble: a row for each count which all the models project, with
+#'   the columns of truth and a_<i> and b_<i>_<j> (i <= j, models numbered in
+#'   the order of 'models')
+comparison_mixture_terms <- function(projections, truth, models = c("mechanistic", "epinowcast", "data-driven"),
+                                     n = 400L, seed = 1) {
+  set.seed(seed)
+  k <- length(models)
+  pairs <- which(upper.tri(diag(k), diag = TRUE), arr.ind = TRUE)
+  pairs <- pairs[order(pairs[, 1], pairs[, 2]), , drop = FALSE]
+  dplyr::bind_rows(lapply(c("cases", "deaths"), function(se) {
+    p <- Filter(function(x) x$series == se && x$model %in% models, projections)
+    if(length(p) < k) return(NULL)
+    p <- p[match(models, vapply(p, `[[`, "", "model"))]
+    onsets <- Reduce(intersect, lapply(p, function(x) as.character(x$onsets)))
+    reports <- Reduce(intersect, lapply(p, function(x) names(x$draws)))
+    dplyr::bind_rows(lapply(reports, function(r) {
+      rows <- truth %>%
+        dplyr::filter(.data$series == se, .data$date_report == as.Date(r),
+                      as.character(.data$date_onset) %in% onsets)
+      x <- lapply(p, function(q) {
+        m <- q$draws[[r]][, match(as.character(rows$date_onset), as.character(q$onsets)), drop = FALSE]
+        m[sample.int(nrow(m), n, replace = nrow(m) < n), , drop = FALSE]
+      })
+      a <- vapply(x, function(m) colMeans(abs(sweep(m, 2, rows$shown))), numeric(nrow(rows)))
+      b <- apply(pairs, 1, function(ij) vapply(seq_len(nrow(rows)), function(c)
+        mean(abs(outer(x[[ij[1]]][, c], x[[ij[2]]][, c], "-"))), 0))
+      a <- matrix(a, nrow(rows)); b <- matrix(b, nrow(rows))
+      colnames(a) <- paste0("a_", seq_len(k))
+      colnames(b) <- sprintf("b_%d_%d", pairs[, 1], pairs[, 2])
+      dplyr::bind_cols(rows, dplyr::as_tibble(a), dplyr::as_tibble(b))
+    }))
+  }))
+}
+
 #' Fits epinowcast to the reports up to a fit date, and projects the reports
 #' scored
 #'
