@@ -107,7 +107,7 @@ jobs:
             IN_DATES=$(f_line dates); IN_ITERATIONS=$(f_line iterations); IN_RIDGE=$(f_line ridge)
             IN_CONTINUE=$(f_line continue); IN_ROUNDS=$(f_line rounds); IN_TIME_LIMIT=$(f_line time_limit)
           fi
-          all="0801,0809,0819,0826,0902,0909,0916,0924,0930,1007,1014"
+          all="0801,0809,0819,0826,0902,0909,0916,0924,0930,1007,1014,1019"
           dates="${IN_DATES:-$all}"
           {
             echo "dates=$dates"
