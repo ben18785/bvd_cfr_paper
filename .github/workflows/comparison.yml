@@ -13,7 +13,10 @@
 # 'mechanistic_draws' of its draws (default 100) to the reports scored, with
 # the package at the commit of the job's PACKAGE; with also
 # 'mechanistic_projected_run: <run id>' those projections are not made again
-# but taken from that run of this workflow.
+# but taken from that run of this workflow. With 'fit_only: true' only the
+# epinowcast fits are made (no data-driven run is needed): each job saves its
+# fit and the case fatality ratio of its eventual counts by onset week, and
+# nothing is scored, so a fit date may be the last report.
 #
 # Needs the repository secret BVD_DATA_KEY, the passphrase of
 # data/bvd_data.tar.gz.enc.
@@ -29,8 +32,9 @@ on:
         required: false
         default: ""
       data_driven_run:
-        description: "The run of the data-driven workflow whose chains are projected"
-        required: true
+        description: "The run of the data-driven workflow whose chains are projected (not needed with fit_only)"
+        required: false
+        default: ""
       epinowcast_run:
         description: "A run of this workflow whose epinowcast fits are reused (empty to fit them)"
         required: false
@@ -63,6 +67,10 @@ on:
         description: "The variant of the data-driven model's settings of its run (data_driven_variant)"
         required: false
         default: ""
+      fit_only:
+        description: "Fit epinowcast only, without scoring (true or false)"
+        required: false
+        default: "false"
   push:
     paths:
       - runs/comparison.txt
@@ -88,6 +96,8 @@ jobs:
       mechanistic_draws: ${{ steps.plan.outputs.mechanistic_draws }}
       mechanistic_projected_run: ${{ steps.plan.outputs.mechanistic_projected_run }}
       chains: ${{ steps.plan.outputs.chains }}
+      enw_variant: ${{ steps.plan.outputs.enw_variant }}
+      fit_only: ${{ steps.plan.outputs.fit_only }}
     steps:
       - uses: actions/checkout@v4
       - id: plan
@@ -99,16 +109,22 @@ jobs:
           IN_MECH_DRAWS: ${{ inputs.mechanistic_draws }}
           IN_MECH_PROJ: ${{ inputs.mechanistic_projected_run }}
           IN_MECH_CHAINS: ${{ inputs.mechanistic_chains }}
+          IN_ENW_VARIANT: ${{ inputs.enw_variant }}
+          IN_FIT_ONLY: ${{ inputs.fit_only }}
         run: |
           f_line() { [ -f runs/comparison.txt ] && sed -n "s/^$1:[[:space:]]*//p" runs/comparison.txt | head -n 1 | tr -d '[:space:]'; }
           if [ "${{ github.event_name }}" = "push" ]; then
             IN_DATES=$(f_line dates); IN_RUN=$(f_line data_driven_run); IN_ENW=$(f_line epinowcast_run)
             IN_MECH=$(f_line mechanistic_run); IN_MECH_DRAWS=$(f_line mechanistic_draws)
             IN_MECH_PROJ=$(f_line mechanistic_projected_run)
+            IN_ENW_VARIANT=$(f_line enw_variant); IN_FIT_ONLY=$(f_line fit_only)
           fi
+          fit_only=$([ "$IN_FIT_ONLY" = "true" ] && echo true || echo false)
+          echo "fit_only=$fit_only" >> "$GITHUB_OUTPUT"
+          echo "enw_variant=$IN_ENW_VARIANT" >> "$GITHUB_OUTPUT"
           all="0801,0809,0819,0826,0902,0909,0916,0924,0930,1007"
           dates="${IN_DATES:-$all}"
-          [ -n "$IN_RUN" ] || { echo "No run of the data-driven workflow given."; exit 1; }
+          [ -n "$IN_RUN" ] || [ "$fit_only" = "true" ] || { echo "No run of the data-driven workflow given."; exit 1; }
           echo "dates=$dates" >> "$GITHUB_OUTPUT"
           echo "data_driven_run=$IN_RUN" >> "$GITHUB_OUTPUT"
           echo "epinowcast_run=$IN_ENW" >> "$GITHUB_OUTPUT"
@@ -139,7 +155,7 @@ jobs:
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       BVD_DATES: ${{ needs.plan.outputs.dates }}
-      BVD_ENW_VARIANT: ${{ inputs.enw_variant }}
+      BVD_ENW_VARIANT: ${{ needs.plan.outputs.enw_variant }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -156,15 +172,25 @@ jobs:
         run: |
           Rscript -e 'targets::tar_make(names = "epinowcast_${{ matrix.label }}", script = "_targets_comparison.R", store = "_targets_comparison", reporter = "timestamp")'
           Rscript -e 'print(readRDS("fits_comparison/epinowcast_${{ matrix.label }}.rds")$diagnostics)'
+      - name: Case fatality ratio of the fit
+        if: needs.plan.outputs.fit_only == 'true'
+        run: |
+          Rscript -e '
+            suppressMessages(library(dplyr))
+            for(f in list.files("R", full.names = TRUE)) source(f)
+            cat("epinowcast variant:", Sys.getenv("BVD_ENW_VARIANT"), "\n")
+            x <- comparison_cfr_epinowcast("fits_comparison/epinowcast_${{ matrix.label }}.rds")
+            utils::write.csv(x, "fits_comparison/epinowcast_cfr_${{ matrix.label }}.csv", row.names = FALSE)
+            print(as.data.frame(x), digits = 3)' | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: epinowcast-${{ matrix.label }}
-          path: fits_comparison/epinowcast_${{ matrix.label }}.rds
-          retention-days: 30
+          path: fits_comparison/epinowcast*_${{ matrix.label }}.*
+          retention-days: ${{ needs.plan.outputs.fit_only == 'true' && 90 || 30 }}
 
   mechanistic:
     needs: plan
-    if: ${{ needs.plan.outputs.mechanistic_run != '' && needs.plan.outputs.mechanistic_projected_run == '' }}
+    if: ${{ needs.plan.outputs.fit_only != 'true' && needs.plan.outputs.mechanistic_run != '' && needs.plan.outputs.mechanistic_projected_run == '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 355
     name: mechanistic ${{ matrix.label }} chain ${{ matrix.chain }}
@@ -223,7 +249,7 @@ jobs:
   collect:
     needs: [plan, fit, mechanistic]
     # after the fits, even if some failed, but not if the run was cancelled
-    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.fit_only != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 355
     env:

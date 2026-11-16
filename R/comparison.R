@@ -61,7 +61,8 @@ comparison_settings <- function() {
 #' @param snapshots as build_bvd_snapshots
 #' @param date_now the fit date
 #' @param settings as comparison_settings
-#' @return a tibble of week and date_report
+#' @return a tibble of week and date_report (no rows if no report follows the
+#'   fit date)
 comparison_reports <- function(snapshots, date_now, settings = comparison_settings()) {
   dates <- sort(unique(snapshots$date_reported))
   dates <- dates[dates > as.Date(date_now) & dates <= settings$date_last]
@@ -69,6 +70,8 @@ comparison_reports <- function(snapshots, date_now, settings = comparison_settin
     d <- dates[dates <= as.Date(date_now) + 7 * k]
     if(length(d) == 0) NULL else dplyr::tibble(week = k, date_report = max(d))
   }))
+  if(nrow(out) == 0)
+    return(dplyr::tibble(week = numeric(0), date_report = as.Date(character(0))))
   dplyr::distinct(out, .data$date_report, .keep_all = TRUE)
 }
 

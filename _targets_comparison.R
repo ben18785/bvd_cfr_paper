@@ -13,7 +13,8 @@
 # runs as a job of its own, and saves its projections to fits_comparison/;
 # with BVD_FITS_FROM_FILES=1 the targets take the files already there
 # instead of fitting. BVD_DATES (mmdd, separated by commas) sets which fit
-# dates are compared (by default all before the last report). With
+# dates are compared (by default those listed below; any other date with a
+# report may be chosen, e.g. to fit epinowcast alone at the last report). With
 # BVD_MECHANISTIC=1 the mechanistic model is compared too, from the
 # projections of its chains already in fits_comparison/ (mechanistic_<mmdd>_<chain>.rds,
 # made by project_mechanistic_chain on GitHub Actions) and its chains in
@@ -29,8 +30,9 @@ with_mechanistic <- Sys.getenv("BVD_MECHANISTIC", "") == "1"
 fit_dates <- as.Date(c("2026-08-01", "2026-08-09", "2026-08-19", "2026-08-26", "2026-09-02",
                        "2026-09-09", "2026-09-16", "2026-09-24", "2026-09-30", "2026-10-07"))
 chosen <- trimws(strsplit(Sys.getenv("BVD_DATES", ""), ",")[[1]])
-if(length(chosen[chosen != ""]) > 0)
-  fit_dates <- fit_dates[format(fit_dates, "%m%d") %in% chosen]
+chosen <- chosen[chosen != ""]
+if(length(chosen) > 0)
+  fit_dates <- as.Date(paste0("2026-", substr(chosen, 1, 2), "-", substr(chosen, 3, 4)))
 out <- "outputs/comparison"
 
 f_fit <- function(date) {
