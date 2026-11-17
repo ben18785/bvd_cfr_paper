@@ -248,16 +248,19 @@ comparison_mixture_terms <- function(projections, truth, models = c("mechanistic
 #' @param date_now the fit date
 #' @param path where the projections are saved
 #' @param settings as comparison_settings
-#' @return path; the file holds a named list: 'projections' (one for cases
-#'   and one for deaths, as described above) and 'diagnostics'
-fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_settings()) {
+#' @param series the series fitted (cases, deaths or both)
+#' @return path; the file holds a named list: 'projections' (one for each
+#'   series, as described above), 'eventual' and 'diagnostics'
+fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_settings(),
+                           series = c("cases", "deaths")) {
   date_now <- as.Date(date_now)
   s <- settings$epinowcast
   reports <- comparison_reports(snapshots, date_now, settings)
   report_days <- sort(unique(snapshots$date_reported[snapshots$date_reported <= date_now]))
   onsets <- seq(settings$date_first, date_now, by = "day")
   scored <- seq(date_now - settings$max_age, date_now, by = "day")
-  out <- lapply(c(cases = "cases_reported", deaths = "deaths_reported"), function(column) {
+  columns <- c(cases = "cases_reported", deaths = "deaths_reported")[series]
+  out <- lapply(columns, function(column) {
     counts <- comparison_monotone(snapshots, column, date_now) %>%
       dplyr::filter(.data$date_onset >= settings$date_first)
     grid <- tidyr::crossing(reference_date = onsets,
@@ -335,7 +338,20 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
          diagnostics = dplyr::tibble(model = "epinowcast", series = sub("_reported", "", column),
                                      date_now = date_now, max_rhat = fit$max_rhat,
                                      divergent = fit$divergent_transitions,
+                                     # (epinowcast's count is of the deepest tree reached,
+                                     # not of the limit)
                                      at_max_treedepth = fit$no_at_max_treedepth,
+                                     # by chain, to show a chain out of line with the others:
+                                     # the deepest tree, the draws at the limit and the mean
+                                     # log density
+                                     treedepth_by_chain = paste(apply(
+                                       fit$fit[[1]]$sampler_diagnostics()[, , "treedepth__"], 2,
+                                       max), collapse = "/"),
+                                     at_limit_by_chain = paste(apply(
+                                       fit$fit[[1]]$sampler_diagnostics()[, , "treedepth__"], 2,
+                                       function(x) sum(x >= s$max_treedepth)), collapse = "/"),
+                                     lp_by_chain = paste(round(apply(
+                                       fit$fit[[1]]$draws("lp__")[, , 1], 2, mean)), collapse = "/"),
                                      minutes = minutes))
   })
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
