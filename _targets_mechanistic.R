@@ -18,7 +18,7 @@
 # BVD_TIME_LIMIT (minutes, default none) when a chain stops to be carried on
 # later, BVD_RIDGE=0 leaves out the joint move of the fraction counted on the
 # day of death and the delay to a death being recorded (made by default), and BVD_DATES (mmdd,
-# separated by commas) which fits are made (by default all).
+# separated by commas, any dates of reports) which fits are made (by default those of fit_dates).
 
 library(targets)
 
@@ -36,9 +36,11 @@ date_last <- as.Date("2026-10-19")
 fit_dates <- as.Date(c("2026-08-01", "2026-08-09", "2026-08-19", "2026-08-26", "2026-09-02",
                        "2026-09-09", "2026-09-16", "2026-09-24", "2026-09-30", "2026-10-07",
                        "2026-10-14", "2026-10-19"))
+# any dates may be chosen (each must be the date of a report)
 chosen <- trimws(strsplit(Sys.getenv("BVD_DATES", ""), ",")[[1]])
-if(length(chosen[chosen != ""]) > 0)
-  fit_dates <- fit_dates[format(fit_dates, "%m%d") %in% chosen]
+chosen <- chosen[chosen != ""]
+if(length(chosen) > 0)
+  fit_dates <- as.Date(paste0("2026-", substr(chosen, 1, 2), "-", substr(chosen, 3, 4)))
 out <- "outputs/mechanistic"
 
 # the targets of one fit date
