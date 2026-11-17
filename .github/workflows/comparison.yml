@@ -156,6 +156,8 @@ jobs:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       BVD_DATES: ${{ needs.plan.outputs.dates }}
       BVD_ENW_VARIANT: ${{ needs.plan.outputs.enw_variant }}
+      # the progress of the chains in the log
+      BVD_ENW_REFRESH: "100"
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup

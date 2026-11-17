@@ -290,7 +290,8 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
                                      adapt_delta = s$adapt_delta,
                                      max_treedepth = s$max_treedepth, pp = TRUE,
                                      sparse_design = s$sparse_design,
-                                     show_messages = FALSE, refresh = 0))
+                                     show_messages = FALSE,
+                                     refresh = as.integer(Sys.getenv("BVD_ENW_REFRESH", "0"))))
     minutes <- as.numeric(difftime(Sys.time(), start, units = "mins"))
     # the predicted new count of every cell of the grid, in the grid's order
     pp <- unclass(posterior::as_draws_matrix(fit$fit[[1]]$draws("pp_obs")))
