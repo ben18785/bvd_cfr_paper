@@ -563,18 +563,23 @@ project_mechanistic <- function(paths, settings = comparison_settings()) {
        diagnostics = dplyr::bind_rows(lapply(out, `[[`, "diagnostics")))
 }
 
-#' The case fatality ratio of a mechanistic fit from the eventual counts of
-#' its draws (comparison_cfr): every case recorded for an onset day is
-#' eventually reported and every death recorded, and wrong records are
-#' removed, so the eventual counts are the cases and fatal cases recorded for
-#' each day
+#' The case fatality ratio of a mechanistic fit: the model's own parameter, the
+#' probability that a case of each onset day is fatal (piecewise constant
+#' between its changepoints)
+#'
+#' In each draw, the mean of the parameter over the days of each onset week,
+#' and over the onset days at least min_age days before the fit date (pooled)
+#' weighted by the true cases of each day. Weeks are marked as recent as in
+#' comparison_cfr. Only the draws which all chains have are kept, the last
+#' ones of each.
 #'
 #' @param paths the files of the fit's chains (as fit_mechanistic_chain saves
 #'   them)
 #' @param min_age as comparison_cfr
+#' @return as comparison_cfr
 mechanistic_cfr <- function(paths, min_age = 21) {
   chains <- lapply(paths, readRDS)
-  date_now <- chains[[1]]$date_now
+  date_now <- as.Date(chains[[1]]$date_now)
   date0 <- chains[[1]]$analysis$dates$date[1]
   f_wide <- function(df, column) {
     df <- df[order(df$iteration, df$time_onset), ]
@@ -582,19 +587,26 @@ mechanistic_cfr <- function(paths, min_age = 21) {
     colnames(m) <- sort(unique(df$time_onset))
     m
   }
-  counts <- lapply(chains, function(x) {
+  each <- lapply(chains, function(x) {
     both <- dplyr::inner_join(x$cases, x$deaths, by = c("iteration", "time_onset"))
-    # the fatal cases dated by death out of each day of onset, and into each
-    # day they are recorded for
-    both$out <- both$deaths_true - both$deaths_recorded + both$dated_by_death
-    both$cases_recorded <- both$cases_true - both$out + both$dated_by_death
-    list(cases = f_wide(both, "cases_recorded"), deaths = f_wide(both, "deaths_recorded"))
+    list(cfr = f_wide(both, "cfr"), cases = f_wide(both, "cases_true"))
   })
-  n <- min(vapply(counts, function(x) nrow(x$cases), numeric(1)))
-  cases <- do.call(rbind, lapply(counts, function(x) utils::tail(x$cases, n)))
-  deaths <- do.call(rbind, lapply(counts, function(x) utils::tail(x$deaths, n)))
-  dates <- date0 + as.integer(colnames(cases)) - 1
-  comparison_cfr(cases, deaths, dates, date_now, "mechanistic", min_age)
+  n <- min(vapply(each, function(x) nrow(x$cfr), numeric(1)))
+  cfr <- do.call(rbind, lapply(each, function(x) utils::tail(x$cfr, n)))
+  cases <- do.call(rbind, lapply(each, function(x) utils::tail(x$cases, n)))
+  dates <- date0 + as.integer(colnames(cfr)) - 1
+  week <- as.Date(cut(dates, "week"))
+  total <- t(rowsum(t(cfr), as.character(week)))
+  by_week <- sweep(total, 2, as.numeric(table(as.character(week))[colnames(total)]), "/")
+  weeks <- as.Date(colnames(by_week))
+  old <- as.numeric(date_now - dates) >= min_age
+  pooled <- rowSums(cfr[, old, drop = FALSE] * cases[, old, drop = FALSE]) /
+    pmax(rowSums(cases[, old, drop = FALSE]), 1)
+  q <- function(x) stats::quantile(x, c(0.05, 0.5, 0.95), names = FALSE)
+  qs <- rbind(t(apply(by_week, 2, q)), q(pooled))
+  recent <- c(as.numeric(date_now - (weeks + 6)) < min_age, FALSE)
+  dplyr::tibble(model = "mechanistic", date_now = date_now, week = c(weeks, as.Date(NA)),
+                recent = recent, p05 = qs[, 1], p50 = qs[, 2], p95 = qs[, 3])
 }
 
 #' The case fatality ratio from the eventual counts of cases and deaths by
