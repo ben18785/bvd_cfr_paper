@@ -48,6 +48,10 @@ on:
         description: "The id of an earlier run whose chains are carried on"
         required: false
         default: ""
+      continue_fallback:
+        description: "The id of a run from which a chain missing from continue_from is carried on"
+        required: false
+        default: ""
       rounds:
         description: "How many more runs may follow to carry the chains on"
         required: false
@@ -154,6 +158,7 @@ jobs:
           BVD_DATA_KEY_FILE="$RUNNER_TEMP/bvd_data_key" scripts/decrypt_bvd_data.sh
           rm "$RUNNER_TEMP/bvd_data_key"
       - name: Fetch the chain to carry on
+        id: fetch
         if: needs.plan.outputs.continue_from != ''
         continue-on-error: true
         uses: actions/download-artifact@v4
@@ -161,6 +166,17 @@ jobs:
           name: state-${{ matrix.label }}-${{ matrix.chain }}
           path: states_mechanistic
           run-id: ${{ needs.plan.outputs.continue_from }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      # a chain whose job failed in that run saved nothing: take it from an
+      # earlier run instead
+      - name: Fetch the chain from the fallback run
+        if: steps.fetch.outcome == 'failure' && inputs.continue_fallback != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: state-${{ matrix.label }}-${{ matrix.chain }}
+          path: states_mechanistic
+          run-id: ${{ inputs.continue_fallback }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run the chain
         run: |
