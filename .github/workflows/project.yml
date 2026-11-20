@@ -1,0 +1,94 @@
+# Projections of mechanistic fits to one later report, for every onset day
+# of each fit (project_mechanistic_report): a job for each chain of each
+# fit, which takes the chain's draws and state from the run of the
+# mechanistic workflow named for its fit date and uploads the artifact
+# project-<mmdd>-<chain>. Started by a push which changes runs/project.txt,
+# whose lines set the run:
+#   fits: <mmdd>:<run id>,<mmdd>:<run id>,...
+#   report: <date of the report projected to, yyyy-mm-dd>
+#   draws: <draws of each chain projected (default 100)>
+#   chains: <chains of each fit (default 4)>
+
+name: project
+run-name: ${{ github.event.head_commit.message || 'project' }}
+
+on:
+  push:
+    paths:
+      - runs/project.txt
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  # the package of the fits (as mechanistic.yml)
+  PACKAGE: github::ben18785/incidenceinflation_2.0@62fb701
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      chains: ${{ steps.plan.outputs.chains }}
+      report: ${{ steps.plan.outputs.report }}
+      draws: ${{ steps.plan.outputs.draws }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: |
+          f_line() { sed -n "s/^$1:[[:space:]]*//p" runs/project.txt | head -n 1 | tr -d '[:space:]'; }
+          echo "report=$(f_line report)" | tee -a "$GITHUB_OUTPUT"
+          d=$(f_line draws); echo "draws=${d:-100}" | tee -a "$GITHUB_OUTPUT"
+          n=$(f_line chains)
+          chains=$(python3 -c "
+          import json, sys
+          fits = [x.split(':') for x in sys.argv[1].split(',') if x]
+          print(json.dumps([{'label': d, 'run': r, 'chain': k} for d, r in fits for k in range(1, int(sys.argv[2]) + 1)]))" "$(f_line fits)" "${n:-4}")
+          echo "chains=$chains" | tee -a "$GITHUB_OUTPUT"
+
+  project:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    name: project ${{ matrix.label }} chain ${{ matrix.chain }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.chains) }}
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-mechanistic
+      - uses: actions/download-artifact@v4
+        with:
+          name: fit-${{ matrix.label }}-${{ matrix.chain }}
+          path: fits_mechanistic
+          run-id: ${{ matrix.run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: state-${{ matrix.label }}-${{ matrix.chain }}
+          path: states_mechanistic
+          run-id: ${{ matrix.run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Project the chain
+        run: |
+          ls -l fits_mechanistic states_mechanistic
+          Rscript -e '
+            suppressMessages(library(dplyr))
+            for(f in list.files("R", full.names = TRUE)) source(f)
+            t0 <- Sys.time()
+            out <- project_mechanistic_report("fits_mechanistic/${{ matrix.label }}_${{ matrix.chain }}.rds",
+                                              "states_mechanistic/${{ matrix.label }}_${{ matrix.chain }}.rds",
+                                              "${{ needs.plan.outputs.report }}",
+                                              "projections/${{ matrix.label }}_${{ matrix.chain }}.rds",
+                                              n_draws = ${{ needs.plan.outputs.draws }})
+            x <- readRDS(out)
+            cat(sprintf("%d draws of %d onset days projected in %.0f minutes\n", length(unique(x$draw)),
+                        length(unique(x$date)), as.numeric(Sys.time() - t0, units = "mins")))'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: project-${{ matrix.label }}-${{ matrix.chain }}
+          path: projections/${{ matrix.label }}_${{ matrix.chain }}.rds
+          retention-days: 90

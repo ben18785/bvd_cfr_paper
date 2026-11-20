@@ -249,10 +249,13 @@ comparison_mixture_terms <- function(projections, truth, models = c("mechanistic
 #' @param path where the projections are saved
 #' @param settings as comparison_settings
 #' @param series the series fitted (cases, deaths or both)
+#' @param project_to a later report date (or NULL): every onset day's count
+#'   in that report is also projected
 #' @return path; the file holds a named list: 'projections' (one for each
-#'   series, as described above), 'eventual' and 'diagnostics'
+#'   series, as described above), 'eventual', 'projected' (NULL for each
+#'   series without project_to) and 'diagnostics'
 fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_settings(),
-                           series = c("cases", "deaths")) {
+                           series = c("cases", "deaths"), project_to = NULL) {
   date_now <- as.Date(date_now)
   s <- settings$epinowcast
   reports <- comparison_reports(snapshots, date_now, settings)
@@ -331,10 +334,26 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
     }
     eventual <- sweep(eventual, 2, latest, "+")
     eventual <- comparison_thin(eventual[, as.character(onsets), drop = FALSE], settings$n_draws)
+    # the count of every onset day in the report of project_to: as the
+    # eventual count, with the predicted new counts up to that day only
+    projected <- NULL
+    if(!is.null(project_to)) {
+      to <- which(as.Date(cells$report_date) > date_now &
+                    as.Date(cells$report_date) <= as.Date(project_to))
+      m <- matrix(0, nrow(pp), length(onsets), dimnames = list(NULL, as.character(onsets)))
+      if(length(to) > 0) {
+        by_onset <- t(rowsum(t(pp[, to, drop = FALSE]), as.character(as.Date(cells$reference_date[to]))))
+        m[, colnames(by_onset)] <- by_onset
+      }
+      projected <- list(series = sub("_reported", "", column), date_now = date_now,
+                        date_report = as.Date(project_to), onsets = onsets,
+                        draws = comparison_thin(sweep(m, 2, latest, "+"), settings$n_draws))
+    }
     list(projections = list(model = "epinowcast", series = sub("_reported", "", column),
                             date_now = date_now, onsets = scored, draws = draws),
          eventual = list(series = sub("_reported", "", column), date_now = date_now,
                          onsets = onsets, draws = eventual),
+         projected = projected,
          diagnostics = dplyr::tibble(model = "epinowcast", series = sub("_reported", "", column),
                                      date_now = date_now, max_rhat = fit$max_rhat,
                                      divergent = fit$divergent_transitions,
@@ -357,6 +376,7 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   saveRDS(list(projections = lapply(out, `[[`, "projections"),
                eventual = lapply(out, `[[`, "eventual"),
+               projected = lapply(out, `[[`, "projected"),
                diagnostics = dplyr::bind_rows(lapply(out, `[[`, "diagnostics"))), path)
   path
 }
@@ -532,6 +552,46 @@ project_mechanistic_chain <- function(fit_path, state_path, snapshots, date_now,
   saveRDS(list(chain = fit$chain, date_now = date_now, iterations = iterations, onsets = scored,
                draws = list(cases = f_series("cases_reported"),
                             deaths = f_series("deaths_reported"))), out)
+  out
+}
+
+#' Projections of one chain of a mechanistic fit to a single later report,
+#' for every onset day in the fit
+#'
+#' As project_mechanistic_chain, but to one report (which need not be one of
+#' those scored) and for all the fit's onset days with reports.
+#'
+#' @param fit_path the chain's draws (as fit_mechanistic_chain saves them)
+#' @param state_path the chain's state file
+#' @param date_report the report projected to
+#' @param out the file to save to
+#' @param n_draws the draws projected, spread evenly over the kept draws
+#' @return out, holding a tibble of chain, draw, date (of onset), cases and
+#'   deaths (the counts in the report of date_report)
+project_mechanistic_report <- function(fit_path, state_path, date_report, out, n_draws = 100L) {
+  fit <- readRDS(fit_path)
+  variables <- readRDS(state_path)$state$variables
+  family <- if(is.null(fit$variant)) NULL else mechanistic_variant(fit$variant)$delay_family
+  old <- options(incidenceinflation.delay_family = if(is.null(family)) "gamma" else family)
+  on.exit(options(old), add = TRUE)
+  date0 <- fit$analysis$dates$date[1]
+  day <- as.integer(as.Date(date_report) - date0) + 1L
+  iterations <- sort(unique(fit$deaths$iteration))
+  iterations <- iterations[unique(round(seq(1, length(iterations),
+                                            length.out = min(n_draws, length(iterations)))))]
+  tables <- c("cases", "reporting_days", "revisions", "reporting_effects", "deaths",
+              "deaths_parameters")
+  set.seed(1000 * fit$chain + as.integer(as.Date(fit$date_now)) %% 1000)
+  simulated <- dplyr::bind_rows(lapply(seq_along(iterations), function(k) {
+    draw <- lapply(fit[tables], function(df) df[df$iteration == iterations[k], ])
+    incidenceinflation::predict_reports(variables, draw, day) %>%
+      dplyr::filter(.data$time_reported == day) %>%
+      dplyr::mutate(draw = k)
+  }))
+  dir.create(dirname(out), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(dplyr::transmute(simulated, chain = fit$chain, draw = .data$draw,
+                           date = date0 + .data$time_onset - 1,
+                           cases = .data$cases_reported, deaths = .data$deaths_reported), out)
   out
 }
 
