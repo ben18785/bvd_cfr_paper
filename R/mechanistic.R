@@ -114,10 +114,23 @@ mechanistic_settings <- function(ridge = FALSE) {
 #'   rather than gamma), 'share05_lognormal' (as share05, with the delays
 #'   log-normal), 'hold7' (deaths in the backlog held for at least 7 days
 #'   after the death, against 21), 'tail' (the tail alone) and 'share05_tail'
-#'   (as share05, with the tail)
+#'   (as share05, with the tail); and the sensitivity analyses, each
+#'   share15_tail with one change: 's1_cfr_loose' (about 5 changes in the case
+#'   fatality ratio expected a priori, against 1), 's2_no_misdating' (no fatal
+#'   cases dated by their death), 's3_backlog_tight' (the sd of the priors
+#'   on the logit of the backlog's share and the log of its rate 0.5, against
+#'   1), 's4_hold14' and 's4_hold28' (deaths held in
+#'   the backlog for at least 14 or 28 days, against 21), 's10_bundibugyo'
+#'   (the time from onset to death gamma with mean 11.7 and sd 5.5 days,
+#'   Wamala et al. 2010 and Rosello et al. 2015 pooled, against 9.3 and 5.5)
+#'   and 's10_short' (mean 7 and sd 4.1), 's12_fixed_june' (the delay to a
+#'   death being recorded held the same up to 30 June, against 31 July) and
+#'   's12_share75' (the share of fatal cases reported when their death is
+#'   recorded held at 0.75, against 1)
 #' @return a list of 'recording_backlog' (settings of the backlog changed),
-#'   'tail' (the starting weight and mean of the tail, if it is added) and
-#'   'delay_family' (the option incidenceinflation.delay_family, if set)
+#'   'tail' (the starting weight and mean of the tail, if it is added),
+#'   'delay_family' (the option incidenceinflation.delay_family, if set),
+#'   'deaths' (settings of the deaths replaced) and 'cfr_expected_changes'
 mechanistic_variant <- function(name) {
   variants <- list(
     base = list(),
@@ -133,6 +146,21 @@ mechanistic_variant <- function(name) {
     tail = list(tail = list(weight = 0.05, mean = 40)),
     share05_tail = list(recording_backlog = list(share_rw_sd_scale = 0.05),
                         tail = list(weight = 0.05, mean = 40)))
+  # the sensitivity analyses: each is share15_tail (the main fit) with one
+  # change
+  main <- variants$share15_tail
+  f_main <- function(change) utils::modifyList(main, change)
+  sensitivity <- list(
+    s1_cfr_loose = f_main(list(cfr_expected_changes = 5)),
+    s2_no_misdating = f_main(list(deaths = list(dated_by_death = NULL))),
+    s3_backlog_tight = f_main(list(recording_backlog = list(share_sd = 0.5, rate_sd = 0.5))),
+    s4_hold14 = f_main(list(recording_backlog = list(hold_days = 14L))),
+    s4_hold28 = f_main(list(recording_backlog = list(hold_days = 28L))),
+    s10_bundibugyo = f_main(list(deaths = list(onset_to_death = list(mean = 11.7, sd = 5.5)))),
+    s10_short = f_main(list(deaths = list(onset_to_death = list(mean = 7, sd = 4.1)))),
+    s12_fixed_june = f_main(list(deaths = list(recording_fixed_until = "2026-06-30"))),
+    s12_share75 = f_main(list(deaths = list(triggered = list(initial = 0.75, n_steps = 0L)))))
+  variants <- c(variants, sensitivity)
   if(name == "")
     name <- "base"
   if(!name %in% names(variants))
@@ -213,15 +241,22 @@ fit_mechanistic_chain <- function(analysis, chain, path, state, iterations,
     list(initial_cfr = start$cfr, initial_delay = start$delay,
          delay_changepoints = delay_changepoints),
     mechanistic_settings(ridge))
+  # a variant of the settings (BVD_VARIANT), if any
+  variant_name <- Sys.getenv("BVD_VARIANT", "")
+  variant <- mechanistic_variant(variant_name)
+  # settings of the deaths changed by the variant (a NULL removes one), and
+  # the prior on changes in the case fatality ratio: beta(1, n_days / k),
+  # about k changes expected
+  for(name in names(variant$deaths))
+    deaths_settings[name] <- list(variant$deaths[[name]])
+  if(!is.null(variant$cfr_expected_changes))
+    deaths_settings[c("alpha", "beta")] <- list(1, nrow(analysis$dates) / variant$cfr_expected_changes)
   # no change in the delay to a death being recorded among the onset days up
   # to recording_fixed_until
   deaths_settings$delay_changepoints$first_length <- min(
     as.integer(as.Date(deaths_settings$recording_fixed_until) - analysis$dates$date[1]) + 1L,
     nrow(analysis$dates))
   deaths_settings$recording_fixed_until <- NULL
-  # a variant of the settings (BVD_VARIANT), if any
-  variant_name <- Sys.getenv("BVD_VARIANT", "")
-  variant <- mechanistic_variant(variant_name)
   if(!is.null(variant$delay_family))
     options(incidenceinflation.delay_family = variant$delay_family)
   if(!is.null(variant$recording_backlog))

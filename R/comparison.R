@@ -251,11 +251,14 @@ comparison_mixture_terms <- function(projections, truth, models = c("mechanistic
 #' @param series the series fitted (cases, deaths or both)
 #' @param project_to a later report date (or NULL): every onset day's count
 #'   in that report is also projected
+#' @param fit_out a file (or NULL): the fit of each series is saved next to
+#'   it, with the series added to its name (draws of its smaller variables,
+#'   the sampler's diagnostics and the data as epinowcast took them)
 #' @return path; the file holds a named list: 'projections' (one for each
 #'   series, as described above), 'eventual', 'projected' (NULL for each
 #'   series without project_to) and 'diagnostics'
 fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_settings(),
-                           series = c("cases", "deaths"), project_to = NULL) {
+                           series = c("cases", "deaths"), project_to = NULL, fit_out = NULL) {
   date_now <- as.Date(date_now)
   s <- settings$epinowcast
   reports <- comparison_reports(snapshots, date_now, settings)
@@ -299,6 +302,23 @@ fit_epinowcast <- function(snapshots, date_now, path, settings = comparison_sett
                                      show_messages = FALSE,
                                      refresh = as.integer(Sys.getenv("BVD_ENW_REFRESH", "0"))))
     minutes <- as.numeric(difftime(Sys.time(), start, units = "mins"))
+    # the fit itself, for its delays and other parameters: the draws (thinned
+    # to n_draws) of every variable of up to 1000 values (so not the
+    # predicted counts of each cell, nor the delay of each onset day and
+    # delay, which can be rebuilt from the parameters kept), with the data
+    # as epinowcast took them
+    if(!is.null(fit_out)) tryCatch({
+      sizes <- fit$fit[[1]]$metadata()$stan_variable_sizes
+      small <- names(sizes)[vapply(sizes, prod, numeric(1)) <= 1000]
+      kept <- posterior::as_draws_matrix(fit$fit[[1]]$draws(small))
+      kept <- posterior::subset_draws(kept, draw = unique(round(seq(1, posterior::ndraws(kept),
+                                                                   length.out = settings$n_draws))))
+      path_fit <- sub("\\.rds$", paste0("_", sub("_reported", "", column), ".rds"), fit_out)
+      dir.create(dirname(path_fit), recursive = TRUE, showWarnings = FALSE)
+      saveRDS(list(series = sub("_reported", "", column), date_now = date_now, settings = s,
+                   draws = kept, sampler = fit$fit[[1]]$sampler_diagnostics(format = "df"),
+                   pobs = pobs, grid = grid), path_fit)
+    }, error = function(e) warning("The fit was not saved: ", conditionMessage(e)))
     # the predicted new count of every cell of the grid, in the grid's order
     pp <- unclass(posterior::as_draws_matrix(fit$fit[[1]]$draws("pp_obs")))
     cells <- pobs$new_confirm[[1]]
