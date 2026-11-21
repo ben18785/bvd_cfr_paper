@@ -116,8 +116,9 @@ mechanistic_settings <- function(ridge = FALSE) {
 #'   after the death, against 21), 'tail' (the tail alone) and 'share05_tail'
 #'   (as share05, with the tail); and the sensitivity analyses, each
 #'   share15_tail with one change: 's1_cfr_loose' (about 5 changes in the case
-#'   fatality ratio expected a priori, against 1), 's2_no_misdating' (no fatal
-#'   cases dated by their death), 's3_backlog_tight' (the sd of the priors
+#'   fatality ratio expected a priori, against 1), 's2_misdating5' (the fraction
+#'   of fatal cases dated by their death fixed at 0.05, against estimated;
+#'   with none, the reports are impossible), 's3_backlog_tight' (the sd of the priors
 #'   on the logit of the backlog's share and the log of its rate 0.5, against
 #'   1), 's4_hold14' and 's4_hold28' (deaths held in
 #'   the backlog for at least 14 or 28 days, against 21), 's10_bundibugyo'
@@ -152,7 +153,7 @@ mechanistic_variant <- function(name) {
   f_main <- function(change) utils::modifyList(main, change)
   sensitivity <- list(
     s1_cfr_loose = f_main(list(cfr_expected_changes = 5)),
-    s2_no_misdating = f_main(list(deaths = list(dated_by_death = NULL))),
+    s2_misdating5 = f_main(list(deaths = list(dated_by_death = list(fraction = 0.05, exact = TRUE)))),
     s3_backlog_tight = f_main(list(recording_backlog = list(share_sd = 0.5, rate_sd = 0.5))),
     s4_hold14 = f_main(list(recording_backlog = list(hold_days = 14L))),
     s4_hold28 = f_main(list(recording_backlog = list(hold_days = 28L))),
