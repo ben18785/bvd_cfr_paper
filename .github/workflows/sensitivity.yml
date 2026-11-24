@@ -1,0 +1,64 @@
+# The sensitivity analyses of the mechanistic model set against its main fit
+# (_targets_sensitivity.R): takes the artifact mechanistic-outputs of the run
+# of mechanistic.yml named for each fit, makes the plots and uploads them as
+# the artifact sensitivity-outputs. Started by a push which changes
+# runs/sensitivity.txt, whose line sets the runs:
+#   fits: main:<run id>,s1_cfr_loose:<run id>,...
+# each fit named as sensitivity_variants (R/sensitivity.R; 'main' for
+# share15_tail), all fitted to the reports of the same date.
+
+name: sensitivity
+run-name: ${{ github.event.head_commit.message || 'sensitivity' }}
+
+on:
+  push:
+    paths:
+      - runs/sensitivity.txt
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  plots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the outputs of each fit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          fits=$(sed -n 's/^fits:[[:space:]]*//p' runs/sensitivity.txt | head -n 1 | tr -d '[:space:]')
+          for x in $(echo "$fits" | tr ',' ' '); do
+            name="${x%%:*}"; run="${x##*:}"
+            echo "$name: run $run"
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" -n mechanistic-outputs -D "fits_sensitivity/$name"
+          done
+          ls -R fits_sensitivity | head -50
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::targets
+            any::dplyr
+            any::ggplot2
+            any::patchwork
+      - name: Make the plots
+        run: Rscript -e 'targets::tar_make(script = "_targets_sensitivity.R", store = "_targets_sensitivity")'
+      - name: Summary
+        run: |
+          echo '### The fits' >> "$GITHUB_STEP_SUMMARY"
+          python3 -c "
+          import csv, sys
+          rows = list(csv.DictReader(open('outputs/sensitivity/sensitivity_convergence.csv')))
+          print('| fit | fit date | iterations | max R-hat | worst |'); print('|---|---|---|---|---|')
+          for r in rows: print(f\"| {r['variant']} | {r['date_now']} | {r['iterations']} | {float(r['rhat_max']):.3f} | {r['worst']} |\")
+          " >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sensitivity-outputs
+          path: outputs/sensitivity
+          retention-days: 90

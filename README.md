@@ -9,6 +9,11 @@ the reports up to a series of dates from 1 August to 14 October:
   incidenceinflation 2.0, `R/mechanistic.R`); outputs in
   `outputs/mechanistic/`. Run with
   `targets::tar_make(script = "_targets_mechanistic.R", store = "_targets_mechanistic")`.
+- `_targets_sensitivity.R`: the sensitivity analyses of the mechanistic model
+  (`R/sensitivity.R`), plotted against its main fit from the outputs of each
+  fit's run; outputs in `outputs/sensitivity/`. On GitHub Actions
+  (`.github/workflows/sensitivity.yml`), started by a push which changes
+  `runs/sensitivity.txt`.
 
 The fits run on GitHub Actions (`.github/workflows/data-driven.yml` and
 `mechanistic.yml`), one job per chain, started by a push which changes

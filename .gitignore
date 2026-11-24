@@ -20,3 +20,6 @@ states_mechanistic/
 # the comparison pipeline's store and fits
 _targets_comparison/
 fits_comparison/
+# the sensitivity pipeline's store and the outputs of the fits it compares
+_targets_sensitivity/
+fits_sensitivity/
