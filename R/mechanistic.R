@@ -396,6 +396,9 @@ mechanistic_draws <- function(chains) {
       if(is.null(x[[p]])) return(NULL)
       df <- dplyr::select(x[[p]], -dplyr::any_of(c("chain", "variant")))
       df <- df[, vapply(df, is.numeric, logical(1)), drop = FALSE]
+      # not stored for this model (eta, where the rate of wrong records is
+      # not the main model's: S6, S7)
+      df <- df[, vapply(df, function(v) any(!is.na(v)), logical(1)), drop = FALSE]
       names(df)[names(df) != "iteration"] <- paste0(p, ".", names(df)[names(df) != "iteration"])
       df
     })
@@ -412,8 +415,9 @@ mechanistic_draws <- function(chains) {
   n <- min(vapply(each, nrow, integer(1)))
   variables <- Reduce(intersect, lapply(each, names))
   variables <- setdiff(variables, "iteration")
-  # the backlog's rate of each report day is not a parameter of interest
-  variables <- variables[!grepl("backlog_rate_[0-9]", variables)]
+  # the backlog's rate of each report day, and the rate of wrong records of
+  # each interval between reports (S7), are not parameters of interest
+  variables <- variables[!grepl("backlog_rate_[0-9]|^revisions\\.eta_[0-9]", variables)]
   a <- array(NA_real_, c(n, length(each), length(variables)),
              dimnames = list(NULL, NULL, variables))
   for(k in seq_along(each))
