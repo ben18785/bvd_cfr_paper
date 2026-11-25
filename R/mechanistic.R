@@ -127,9 +127,17 @@ mechanistic_settings <- function(ridge = FALSE) {
 #'   and 's10_short' (mean 7 and sd 4.1), 's12_fixed_june' (the delay to a
 #'   death being recorded held the same up to 30 June, against 31 July) and
 #'   's12_share75' (the share of fatal cases reported when their death is
-#'   recorded held at 0.75, against 1)
+#'   recorded held at 0.75, against 1); and those which need the package's
+#'   extensions (sensitivity_extensions.tex): 's6_wrong_constant' (wrong
+#'   records entered at a constant rate for each onset day, against in
+#'   proportion to the cases being reported; the prior's mean set from the
+#'   reports by mechanistic_wrong_rate_mean), 's7_wrong_walk' (the rate of wrong
+#'   records a random walk over the intervals between reports) and
+#'   's8_tail_walk' (the weight of the tail of the reporting delay a random
+#'   walk over onset weeks), with the package's default priors of the walks
 #' @return a list of 'recording_backlog' (settings of the backlog changed),
 #'   'tail' (the starting weight and mean of the tail, if it is added),
+#'   'revisions' and 'reporting_effects' (priors of these changed),
 #'   'delay_family' (the option incidenceinflation.delay_family, if set),
 #'   'deaths' (settings of the deaths replaced) and 'cfr_expected_changes'
 mechanistic_variant <- function(name) {
@@ -160,13 +168,35 @@ mechanistic_variant <- function(name) {
     s10_bundibugyo = f_main(list(deaths = list(onset_to_death = list(mean = 11.7, sd = 5.5)))),
     s10_short = f_main(list(deaths = list(onset_to_death = list(mean = 7, sd = 4.1)))),
     s12_fixed_june = f_main(list(deaths = list(recording_fixed_until = "2026-06-30"))),
-    s12_share75 = f_main(list(deaths = list(triggered = list(initial = 0.75, n_steps = 0L)))))
+    s12_share75 = f_main(list(deaths = list(triggered = list(initial = 0.75, n_steps = 0L)))),
+    s6_wrong_constant = f_main(list(revisions = list(wrong_rate = "constant"))),
+    s7_wrong_walk = f_main(list(revisions = list(wrong_rate = "walk"))),
+    s8_tail_walk = f_main(list(reporting_effects = list(tail_weight_walk = TRUE))))
   variants <- c(variants, sensitivity)
   if(name == "")
     name <- "base"
   if(!name %in% names(variants))
     stop(paste("Unknown variant:", name))
   variants[[name]]
+}
+
+#' The mean of the prior of a constant rate of wrong records (S6)
+#'
+#' The cases removed by falls in the reports, divided by the days of all onset
+#' days between their first and last reports: about the rate of withdrawal per
+#' onset day per day, and so, once entries and withdrawals balance, a lower
+#' bound on the rate of entry, since withdrawals within a rise are not seen
+#' (sensitivity_extensions.tex, S6).
+#' @param snapshots the reports, with time_onset, time_reported and
+#'   cases_reported
+#' @return the mean
+mechanistic_wrong_rate_mean <- function(snapshots) {
+  by_day <- snapshots %>%
+    dplyr::group_by(.data$time_onset) %>%
+    dplyr::arrange(.data$time_reported, .by_group = TRUE) %>%
+    dplyr::summarise(removed = sum(pmax(0, -diff(.data$cases_reported))),
+                     days = as.numeric(max(.data$time_reported) - min(.data$time_reported)))
+  sum(by_day$removed) / sum(by_day$days)
 }
 
 #' The starting values of a chain: near one another, scaled by the chain
@@ -263,6 +293,19 @@ fit_mechanistic_chain <- function(analysis, chain, path, state, iterations,
   if(!is.null(variant$recording_backlog))
     deaths_settings$recording_backlog <- utils::modifyList(deaths_settings$recording_backlog,
                                                            variant$recording_backlog)
+  # priors of the wrong records and the tail changed by the variant; a
+  # constant rate of wrong records has a gamma prior with its mean from the
+  # reports and an sd equal to it, as for eta
+  if(!is.null(variant$revisions))
+    priors$revisions <- utils::modifyList(priors$revisions, variant$revisions)
+  if(identical(priors$revisions$wrong_rate, "constant")) {
+    eta_bg_mu <- mechanistic_wrong_rate_mean(snapshots)
+    priors$revisions[c("eta_bg_mu", "eta_bg_sigma")] <- list(eta_bg_mu, eta_bg_mu)
+    message(sprintf("Prior of the constant rate of wrong records: mean and sd %.4g", eta_bg_mu))
+  }
+  if(!is.null(variant$reporting_effects))
+    priors$reporting_effects <- utils::modifyList(priors$reporting_effects,
+                                                  variant$reporting_effects)
 
   done <- if(is.null(resume)) 0 else resume$iterations
   minutes_before <- if(is.null(resume)) 0 else resume$minutes

@@ -78,7 +78,9 @@ permissions:
   actions: write
 
 env:
-  PACKAGE: github::ben18785/incidenceinflation_2.0@62fb701
+  # the sensitivity analyses S6-S8 need the package's extensions (a34db93,
+  # whose main model gives the same draws as 62fb701: its reference tests)
+  PACKAGE: ${{ (startsWith(inputs.variant, 's6_') || startsWith(inputs.variant, 's7_') || startsWith(inputs.variant, 's8_')) && 'github::ben18785/incidenceinflation_2.0@a34db93' || 'github::ben18785/incidenceinflation_2.0@62fb701' }}
 
 jobs:
   plan:
