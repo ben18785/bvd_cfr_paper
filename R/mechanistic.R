@@ -312,6 +312,7 @@ fit_mechanistic_chain <- function(analysis, chain, path, state, iterations,
   time_start <- Sys.time()
   draws <- resume$draws
   state_sampler <- resume$state
+  wrong_cap <- resume$wrong_cap
   if(done < iterations) {
     dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
     progress_file <- file.path(dirname(path), sub("\\.rds$", "_progress.txt", basename(path)))
@@ -341,7 +342,11 @@ fit_mechanistic_chain <- function(analysis, chain, path, state, iterations,
                       dplyr::select("time_onset", "time_reported", "deaths_reported"),
                     settings = deaths_settings),
       return_state = TRUE, resume_from = state_sampler, time_limit = time_limit)
-    names_draws <- setdiff(names(fit), c("state", "iterations_done"))
+    # with a rate of wrong records other than the main model's (S6, S7), the
+    # probability that more are present than are allowed for, at the posterior
+    # mean of this round's draws: a summary, not draws
+    wrong_cap <- fit$wrong_cap
+    names_draws <- setdiff(names(fit), c("state", "iterations_done", "wrong_cap"))
     draws <- lapply(stats::setNames(names_draws, names_draws), function(name)
       dplyr::bind_rows(draws[[name]], fit[[name]]))
     state_sampler <- fit$state
@@ -349,12 +354,13 @@ fit_mechanistic_chain <- function(analysis, chain, path, state, iterations,
   }
   minutes <- minutes_before + as.numeric(Sys.time() - time_start, units = "mins")
   dir.create(dirname(state), recursive = TRUE, showWarnings = FALSE)
-  saveRDS(list(draws = draws, state = state_sampler, iterations = done, minutes = minutes),
+  saveRDS(list(draws = draws, state = state_sampler, iterations = done, minutes = minutes,
+               wrong_cap = wrong_cap),
           state, compress = "xz")
   kept <- unique(round(seq(floor(done / 2) + 1, done, length.out = n_draws)))
   out <- list(variant = variant_name, chain = chain, date_now = analysis$date_now, analysis = analysis,
               ridge = ridge, niterations = done, niterations_target = iterations,
-              minutes = minutes, max_erroneous = max_erroneous)
+              minutes = minutes, max_erroneous = max_erroneous, wrong_cap = wrong_cap)
   for(name in intersect(names(draws), c(
     "cases", "Rt", "reporting_days", "overdispersion", "deaths", "deaths_parameters",
     "Rt_changepoints", "reporting_changepoints", "revisions", "reporting_effects")))
